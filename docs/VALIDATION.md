@@ -88,3 +88,16 @@
 构建 10 等待连续三次相同布局、补全拖动序列、在收起状态保存原始邻居；归位时临时加宽自有分隔项，将源图标与邻居所需的插入空间移到刘海外。独立 QA 几何探针成功（`build10-notch-clear-placement.json`）；单独增加等待或 motion 事件的失败记录也保留。完整产品端到端验证尚未执行。
 
 17 项菜单测试／4 组通过（`menu-build10-tests.log`），Release 编译和签名校验通过。构建 10 已统一安装，SHA256 `c8e796128da65833255ce966815cce5c7fef9c9498ed0abdda55672a3a63ebd3`；初始权限两项 false，已通知用户恢复。接下来只验收这份安装产物。一键收纳、三类菜单、新图标、最终两小时和原有恢复矩阵仍不得计为最终通过。
+
+## 构建 11 候选：直接激活与截图标注（2026-10-20）
+
+本轮按 `docs/OPENCODE-IMPLEMENTATION-PLAN.md` 替换旧“临时拖出再归位”交互，候选源码尚未安装。以下区分已确认探针、自动测试与待做端到端验收。
+
+- **Git：** 已建立本地仓库，基线提交 `9ff965d8b4a2a8f6175440453b8c7f7288c6eb43`；后续改动尚未提交。
+- **直接激活探针：** Normal 的 `AXPress` 返回 `-25204` 但真实菜单出现（屏幕内 146×69），Popover 返回 `0` 且真实弹窗出现（286×176），两者图标均未移动；证据 `.validation/build10-direct-probe2-normal.json`、`.validation/build10-direct-probe2-popover.json`。
+- **右键限制：** Right 只暴露 `AXPress`，触发左侧普通菜单；`AXShowMenu` 返回 `-25206`。右键直开当前不可行，产品禁用该项并提供“展开菜单栏”出口。证据 `.validation/build10-direct-probe-right.json`、`...-right-showmenu.json`。
+- **原生拖入限制：** 普通拖拽无效果；Command 拖拽只把状态项移到 `[567,595]` 并脱离菜单栏，drop 探针没有 `drag-entered`，无来源识别。真实拖入暂不可实现，不能用面板内拖动伪造。证据 `.validation/build10-drag-native-left.json`、`.validation/build10-drag-native-command.json`。
+- **自动测试：** 当前 `bash scripts/swift-command.sh test` 54 项／9 组通过，包含 5 项标注几何、反向矩形、命中测试、文字边界、原像素导出测试；输出 `.validation/build10-final-unit-tests.log`。
+- **已实现候选：** 收纳盒内左键直接调用原应用 AX 状态项，失败只提示不自动移动；截图改为进入独立标注编辑器，支持矩形、箭头、文字、画笔、选择/移动/删除、控制点、重编辑、撤销/重做、复制/保存/贴图/取消，导出不含工具栏与选择框。
+- **夹具：** 旧夹具在 Command 拖拽后损坏，新身份 `app.flowmori.MenuBarFixture2`、日志 `/tmp/flowmori-qa-events.jsonl`，顺序恢复为 695/905/1032。旧证据和旧 PID 仅供历史对照。
+- **待验收：** 新候选 release 构建/安装、TCC 重新授权、`menu-acceptance.py` 直接激活断言、右键 unsupported 出口、截图编辑器真实中文输入法与剪贴板/保存/贴图一致性、源退出/超时/睡眠恢复、两小时稳定性。以上均不得用本轮自动测试代替。

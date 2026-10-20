@@ -2,37 +2,48 @@
 
 仅在用户明确允许本地辅助功能／系统事件脚本后使用，范围见 `docs/UI-TEST-PLAN.md`。这些文件不会进入 Flowmori.app，也不会注册登录启动。
 
-`bash scripts/qa/build.sh` 生成 `.validation/Flowmori QA.app`。它提供三个菜单栏图标（普通菜单、弹窗、右键）和一个包含固定内容的专用测试文档。事件记录使用启动参数指定的 JSONL 文件：
+`bash scripts/qa/build.sh` 生成 `.validation/Flowmori QA.app` 和包外 `.validation/FlowmoriQAHelper`。夹具身份为 `app.flowmori.MenuBarFixture2`，autosave 为 `Flowmori.QA.2.*`，事件日志写在 `/tmp/flowmori-qa-events.jsonl`，不要再用旧夹具 ID `app.flowmori.MenuBarFixture` 或 `.validation/build7-fixture-events.jsonl`。
 
 ```sh
-open '.validation/Flowmori QA.app' --args --fixture "$PWD/.validation/menu-fixture-events.jsonl"
+bash scripts/qa/build.sh
+open '.validation/Flowmori QA.app'
 python3 scripts/qa/run.py '{"op":"status"}'
 python3 scripts/qa/run.py '{"op":"tree","bundle":"app.flowmori.Flowmori"}'
-python3 scripts/qa/run.py '{"op":"extras"}'
+python3 scripts/qa/run.py '{"op":"extras","bundle":"app.flowmori.MenuBarFixture2"}'
 python3 scripts/qa/run.py '{"op":"menuProbe"}'
 ```
 
-`menuProbe`、`menuDrag`、`menuMoveBefore`、`menuClick` 编译并调用当前产品的菜单栏兼容层，而不是另写一份模拟实现。只有本测试程序的图标允许被移动或点击；`menuMoveBefore` 的相邻项也必须属于 Flowmori 或本测试程序。
+## 菜单探针
 
-`key` 仅在 Flowmori 或测试程序前台时工作，使用真实系统事件路径。`press`、`set` 的路径来自上一次 `tree` 输出，只允许这两个应用。坐标点击和拖动必须依据刚读取的指定测试窗口／图标位置，不得将脚本用于其他业务应用。执行鼠标操作前检查屏幕布局是否变化。
+`menuProbe`、`menuDrag`、`menuMoveBefore`、`menuClick` 编译并调用当前产品的菜单栏兼容层。只有本测试程序的图标允许被移动或点击。
 
-辅助功能授权归属于执行脚本的宿主（此验收环境显示为 ChatGPT.app），与 Flowmori 和电脑控制工具各自的授权不同。脚本不读取或修改系统权限数据库。
-
-命令行请求通过 App 包外的 `FlowmoriQAHelper` 执行，避免系统把每次探测的退出误报为测试应用退出，干扰正在验证的生命周期恢复。锁屏时拒绝发送输入；快捷键前再次核对专用测试应用焦点。
-
-完整收纳面板回归：将三个测试图标放在分隔符左侧并关闭面板后，执行 `python3 scripts/qa/menu-acceptance.py`。脚本仅点击 Flowmori 和专用测试图标的控件，验证普通菜单、弹窗、右键和原始顺序恢复；失败即停止，并将证据写入 `.validation/menu-panel-acceptance.json`，可用 `--output` 指定其他证据文件。
-
-面板回归通过产品菜单栏入口打开，排除设置窗口的同名按钮，归位后至少连续四秒保持收起才计通过。Option+M 的快捷键验收应独立进行。
-
-恢复验收要求构建 6 或更新版本已授权，使用 `--diagnostics` 启动，并预先把三个测试图标放入收纳区：
+`probeDirect` 只对夹具使用：重新解析 `AXExtrasMenuBar`，可指定 `AXPress` 或 `AXShowMenu`，并在动作前后采样布局、AX 菜单/弹窗状态和 `CGWindowList` 窗口 frame：
 
 ```sh
-python3 scripts/qa/menu-recovery.py --case timeout \
-  --heartbeat .validation/heartbeat-flowmori-build6.json \
-  --output .validation/build6-timeout-proof.json
-python3 scripts/qa/menu-recovery.py --case exit \
-  --heartbeat .validation/heartbeat-flowmori-build6.json \
-  --output .validation/build6-source-exit-proof.json
+python3 scripts/qa/run.py '{"op":"probeDirect","bundle":"app.flowmori.MenuBarFixture2","role":"AXMenuBarItem","text":"Flowmori QA Normal"}'
 ```
 
-超时检查让专用弹窗保持打开约两分钟；期间关闭弹窗、锁屏或应用变化可能使操作取消，取消不能替代超时通过。退出检查只正常退出已核对身份的测试应用 PID。两项都核对同一产品进程、心跳时效、具体结束分支、展开状态和中文说明。退出检查后需要重新启动测试应用并准备收纳区。此脚本不撤销系统权限，也不注销用户会话。
+`dragNative` 用产品式 CGEvent 拖拽夹具图标到指定坐标，可选 `command:true`。`--drag-probe` 模式会打开拖放接收窗口，记录 `drag-entered` 等事件。当前结果：普通拖拽无效果；Command 拖拽只移动并脱离状态项，没有拖放会话，因此真实“拖入收纳盒”不可实现。
+
+`sampleLayout` 在指定时长内以约 50ms 间隔采样允许应用的图标 frame，输出 `changeCount`/`changes`，用于证明直接激活期间没有临时移出：
+
+```sh
+python3 scripts/qa/run.py '{"op":"sampleLayout","duration":6,"intervalMs":50}'
+```
+
+## 直接激活验收
+
+先确保新候选已安装并授权。`python3 scripts/qa/menu-acceptance.py` 只点击 Flowmori 与夹具控件：
+
+- Normal/Popover：打开收纳面板，点击代理图标，确认真实菜单/弹窗出现并执行动作；后台 `sampleLayout` 必须报告 0 次图标移动，结束后连续至少 4 秒保持收起且顺序为 Normal/Popover/Right。
+- Right：夹具只暴露 `AXPress`，右键直开被产品禁用；脚本记录 `unsupportedReason`，并验证“展开菜单栏”出口能真实展开，再收纳回原位。不能把 Right 写成通过。
+
+证据默认写入 `.validation/menu-panel-acceptance.json`，可用 `--output` 指定。若脚本报 Right 直开突然可用，必须重新设计完整右键验收，不能删除断言。
+
+## 其他
+
+`key` 仅在 Flowmori 或夹具前台时工作。`press`、`set` 的路径来自上一次 `tree` 输出。坐标点击/拖动必须依据刚读取的测试控件或图标位置。执行鼠标操作前检查屏幕布局是否变化；锁屏立即停止输入。
+
+辅助功能授权归属于执行脚本的宿主（本机显示为 ChatGPT.app），与 Flowmori 自身授权不同。脚本不读取或修改 TCC 数据库。命令行请求通过包外 `FlowmoriQAHelper` 执行，避免系统把探测退出误报为夹具退出。
+
+旧 `menu-recovery.py` 的超时/源退出断言仍以旧“必须展开”语义为背景；直接交互版本需按新方案更新后再运行，不能直接沿用作为通过证据。恢复验收的其他限制见 `docs/VALIDATION.md`。

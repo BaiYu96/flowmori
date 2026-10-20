@@ -63,7 +63,7 @@ def main():
             # Terminate only the observed fixture PID after checking its identity.
             code = ('import AppKit; '
                     f'if let app = NSRunningApplication(processIdentifier: {int(source_pid)}), '
-                    'app.bundleIdentifier == "app.flowmori.MenuBarFixture" '
+                    'app.bundleIdentifier == "app.flowmori.MenuBarFixture2" '
                     '{ print(app.terminate()) }')
             result = subprocess.run(['swift', '-e', code], capture_output=True, text=True, check=True)
             if result.stdout.strip() != 'true':

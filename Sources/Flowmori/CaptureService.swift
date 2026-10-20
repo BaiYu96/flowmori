@@ -9,7 +9,7 @@ import FlowmoriCore
     private var previousApplication: NSRunningApplication?
     private var sessionID: UUID?
     private var operation: Task<Void,Never>?
-    var onImage: ((Data) -> Void)?
+    var onImage: ((CGImage, NSRunningApplication?) -> Void)?
     var onMessage: ((String) -> Void)?
     var beforeCapture: (() -> Void)?
     func begin() {
@@ -60,16 +60,19 @@ import FlowmoriCore
     private func finish(rect: CGRect, screen: NSScreen, image: CGImage) {
         let global = rect.offsetBy(dx:screen.frame.minX,dy:screen.frame.minY)
         let crop = ScreenGeometry.pixelCrop(selection:global,screen:screen.frame,pixelWidth:image.width,pixelHeight:image.height)
-        guard crop.width >= 2, crop.height >= 2, let cropped = image.cropping(to:crop),
-              let png = NSBitmapImageRep(cgImage:cropped).representation(using:.png,properties:[:]) else { return }
-        cancel(); onImage?(png)
+        guard crop.width >= 2, crop.height >= 2, let cropped = image.cropping(to:crop) else { return }
+        let restore = endSession(restoreFocus:false)
+        onImage?(cropped, restore)
     }
-    func cancel() {
+    func cancel() { _ = endSession(restoreFocus:true) }
+    @discardableResult private func endSession(restoreFocus: Bool) -> NSRunningApplication? {
         operation?.cancel(); operation = nil
         sessionID = nil
         panels.forEach { $0.orderOut(nil); $0.close() }; panels.removeAll(); snapshots.removeAll(); capturing = false
-        if let app = previousApplication, app.processIdentifier != ProcessInfo.processInfo.processIdentifier, !app.isTerminated { app.activate(options:[]) }
+        let app = previousApplication
+        if restoreFocus, let app, app.processIdentifier != ProcessInfo.processInfo.processIdentifier, !app.isTerminated { app.activate(options:[]) }
         previousApplication = nil
+        return app
     }
     enum CaptureError: LocalizedError {
         case noDisplay

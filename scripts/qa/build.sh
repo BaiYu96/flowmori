@@ -18,7 +18,7 @@ cat > "$TASK_APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>CFBundleIdentifier</key><string>app.flowmori.MenuBarFixture</string>
+<key>CFBundleIdentifier</key><string>app.flowmori.MenuBarFixture2</string>
 <key>CFBundleExecutable</key><string>FlowmoriQA</string>
 <key>CFBundleName</key><string>Flowmori QA</string>
 <key>CFBundlePackageType</key><string>APPL</string>

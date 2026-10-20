@@ -67,8 +67,17 @@ struct CollectionView: View {
                                     Text(item.name).font(.caption).lineLimit(1)
                                     if item.title != item.name && !item.title.isEmpty { Text(item.title).font(.system(size:9)).foregroundStyle(.secondary).lineLimit(1) }
                                 }.frame(maxWidth:.infinity,minHeight:72).padding(5).background(.quaternary.opacity(0.5),in:RoundedRectangle(cornerRadius:10))
-                            }.buttonStyle(.plain).help(item.title.isEmpty ? item.name : item.title).disabled(!item.ownershipResolved || item.protected || manager.operating)
-                                .contextMenu { Button("右键操作") { manager.activate(item,right:true) }; Button("打开") { manager.activate(item,right:false) } }
+                            }.buttonStyle(.plain)
+                                .help("直接在收纳盒内打开；不能直接操作时请使用「展开菜单栏」。")
+                                .accessibilityLabel("直接打开 \(item.title.isEmpty ? item.name : item.title)")
+                                .disabled(!item.ownershipResolved || item.protected || manager.operating)
+                                .contextMenu {
+                                    Button("打开") { manager.activate(item,right:false) }
+                                    Button("右键操作") { manager.activate(item,right:true) }
+                                        .disabled(!item.rightDirectAvailable)
+                                    Divider()
+                                    Button("展开菜单栏") { manager.expandMenuBar() }
+                                }
                         }
                     }.padding(12)
                 }
@@ -77,7 +86,15 @@ struct CollectionView: View {
             HStack {
                 Text(manager.message).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
                 Spacer()
-                if settings.menuEnabled { Button(manager.expanded ? "收纳全部" : "展开") { manager.toggleExpanded() }.controlSize(.small).disabled(manager.operating) }
+                if settings.menuEnabled {
+                    Button("展开菜单栏") { manager.expandMenuBar() }
+                        .controlSize(.small)
+                        .disabled(manager.operating)
+                        .help("直接打开不支持的图标时，用此出口到菜单栏手动操作")
+                    Button(manager.expanded ? "收纳全部" : "展开") { manager.toggleExpanded() }
+                        .controlSize(.small)
+                        .disabled(manager.operating)
+                }
             }.padding(12)
         }.frame(width:430,height:340)
             .background(.regularMaterial,in:RoundedRectangle(cornerRadius:14))

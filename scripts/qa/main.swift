@@ -3,7 +3,7 @@ import ApplicationServices
 
 // Local UI acceptance harness. Never included in Flowmori.app or enabled on login.
 // Its only UI targets are Flowmori and this dedicated fixture application.
-let fixtureID = "app.flowmori.MenuBarFixture"
+let fixtureID = "app.flowmori.MenuBarFixture2"
 let allowedBundles = ["app.flowmori.Flowmori", fixtureID]
 func emit(_ value: Any) {
     if let data = try? JSONSerialization.data(withJSONObject:value,options:[.prettyPrinted,.sortedKeys,.fragmentsAllowed]) {
@@ -38,16 +38,86 @@ func tree(_ element:AXUIElement,_ path:[Int] = [],_ depth:Int = 0,_ ancestors:[A
     if depth < 12 && !isSystemMenu { value["children"] = children(element).prefix(150).enumerated().map { tree($0.element,path+[$0.offset],depth+1,ancestors+[element]) } }
     return value
 }
+func findAX(_ element:AXUIElement,_ role:String,_ text:String,_ depth:Int = 0,_ ancestors:[AXUIElement] = []) -> AXUIElement? {
+    guard depth <= 12, !ancestors.contains(where: { CFEqual($0,element) }) else { return nil }
+    let candidates = [attribute(element,kAXDescriptionAttribute) as? String,
+                      attribute(element,kAXTitleAttribute) as? String].compactMap { $0 }
+    if (attribute(element,kAXRoleAttribute) as? String) == role,
+       candidates.contains(where: { $0.contains(text) }),
+       let value = frame(element), value.width > 0 { return element }
+    for child in children(element) {
+        if let found = findAX(child,role,text,depth+1,ancestors+[element]) { return found }
+    }
+    return nil
+}
+func axState(_ root:AXUIElement) -> [String:Any] {
+    var menus:[String] = [], items:[String] = [], windows:[[Double]] = []
+    var popover = false
+    func walk(_ element:AXUIElement,_ depth:Int,_ ancestors:[AXUIElement]) {
+        guard depth <= 14, !ancestors.contains(where: { CFEqual($0,element) }) else { return }
+        let role = attribute(element,kAXRoleAttribute) as? String ?? ""
+        let title = attribute(element,kAXTitleAttribute) as? String ?? ""
+        let desc = attribute(element,kAXDescriptionAttribute) as? String ?? ""
+        let value = attribute(element,kAXValueAttribute) as? String ?? ""
+        let f = frame(element)
+        let visible = (f?.width ?? 0) > 0 && (f?.height ?? 0) > 0
+        if role == "AXMenu", visible { menus.append(title) }
+        if role == "AXMenuItem", visible { items.append(title) }
+        if visible && (desc.contains("关闭测试弹窗") || value.contains("Flowmori 专用测试弹窗")) { popover = true }
+        if role == "AXWindow", visible, let f { windows.append([f.minX,f.minY,f.width,f.height]) }
+        for child in children(element) { walk(child,depth+1,ancestors+[element]) }
+    }
+    walk(root,0,[])
+    return ["menus":menus,"menuItems":items,"popover":popover,"windows":windows]
+}
+
+final class DropProbeView: NSView {
+    var onEvent: ((String,[String:Any]) -> Void)?
+    override init(frame:NSRect) {
+        super.init(frame:frame)
+        registerForDraggedTypes([.fileURL,.URL,.string,.tiff,.png,.pdf,.html,.rtf,.color,.multipleTextSelection,
+                                 NSPasteboard.PasteboardType("public.data"),NSPasteboard.PasteboardType("com.apple.finder.node"),
+                                 NSPasteboard.PasteboardType("NSFilenamesPboardType")])
+    }
+    required init?(coder:NSCoder) { fatalError() }
+    private func describe(_ sender:NSDraggingInfo) -> [String:Any] {
+        let pasteboard = sender.draggingPasteboard
+        return ["types":pasteboard.types?.map(\.rawValue) ?? [],
+                "source":String(describing:sender.draggingSource),
+                "location":[sender.draggingLocation.x,sender.draggingLocation.y]]
+    }
+    override func draggingEntered(_ sender:NSDraggingInfo) -> NSDragOperation {
+        onEvent?("drag-entered",describe(sender)); return .copy
+    }
+    override func draggingUpdated(_ sender:NSDraggingInfo) -> NSDragOperation {
+        onEvent?("drag-updated",describe(sender)); return .copy
+    }
+    override func prepareForDragOperation(_ sender:NSDraggingInfo) -> Bool {
+        onEvent?("drag-prepare",describe(sender)); return true
+    }
+    override func performDragOperation(_ sender:NSDraggingInfo) -> Bool {
+        onEvent?("drag-perform",describe(sender)); return true
+    }
+    override func draggingExited(_ sender:NSDraggingInfo?) {
+        onEvent?("drag-exited",sender.map(describe) ?? [:])
+    }
+    override func concludeDragOperation(_ sender:NSDraggingInfo?) {
+        onEvent?("drag-concluded",sender.map(describe) ?? [:])
+    }
+}
 
 final class Fixture: NSObject, NSApplicationDelegate, NSMenuDelegate, NSPopoverDelegate {
     var items: [NSStatusItem] = []
     var popover = NSPopover()
     var document: NSWindow!
     var textView: NSTextView!
+    var dropWindow: NSWindow?
     let log: URL
-    init(log:URL) { self.log = log }
-    func record(_ event:String) {
-        let record: [String:Any] = ["event":event,"time":Date().timeIntervalSince1970,"pid":getpid()]
+    let dragProbe: Bool
+    init(log:URL,dragProbe:Bool = false) { self.log = log; self.dragProbe = dragProbe }
+    func record(_ event:String,_ details:[String:Any] = [:]) {
+        var record: [String:Any] = ["event":event,"time":Date().timeIntervalSince1970,"pid":getpid()]
+        for (key,value) in details { record[key] = value }
         guard var data = try? JSONSerialization.data(withJSONObject:record,options:.sortedKeys) else { return }
         data.append(10)
         if !FileManager.default.fileExists(atPath:log.path) { FileManager.default.createFile(atPath:log.path,contents:nil) }
@@ -56,7 +126,7 @@ final class Fixture: NSObject, NSApplicationDelegate, NSMenuDelegate, NSPopoverD
     func applicationDidFinishLaunching(_ notification:Notification) {
         for (index,name) in ["Normal","Popover","Right"].enumerated() {
             let item = NSStatusBar.system.statusItem(withLength:[36,48,24][index])
-            item.autosaveName = "Flowmori.QA.\(name)"
+            item.autosaveName = "Flowmori.QA.2.\(name)"
             item.button?.title = "F\(index+1)"; item.button?.toolTip = "Flowmori QA \(name)"
             item.button?.setAccessibilityLabel("Flowmori QA \(name)")
             item.button?.target = self; item.button?.action = #selector(clicked(_:))
@@ -79,8 +149,16 @@ final class Fixture: NSObject, NSApplicationDelegate, NSMenuDelegate, NSPopoverD
         let content = NSMutableAttributedString(string:"Flowmori 验收：中文复制与截图取消。\n第二行：富文本 Bold 与链接 https://example.com\n截图区域：ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789",attributes:[.font:NSFont.systemFont(ofSize:22),.foregroundColor:NSColor.labelColor])
         content.addAttributes([.font:NSFont.boldSystemFont(ofSize:22),.foregroundColor:NSColor.systemBlue],range:(content.string as NSString).range(of:"Bold"))
         textView.textStorage?.setAttributedString(content); scroll.documentView = textView; document.contentView = scroll
-        document.makeKeyAndOrderFront(nil); document.makeFirstResponder(textView); NSApp.activate(ignoringOtherApps:true)
-        record("launched")
+        document.makeKeyAndOrderFront(nil); document.makeFirstResponder(textView)
+        if dragProbe {
+            let window = NSWindow(contentRect:NSRect(x:300,y:210,width:520,height:320),styleMask:[.titled,.closable],backing:.buffered,defer:false)
+            window.title = "Flowmori 拖放探针"; window.isReleasedWhenClosed = false
+            let view = DropProbeView(frame:window.contentView!.bounds); view.autoresizingMask = [.width,.height]
+            view.onEvent = { [weak self] event, details in self?.record(event,details) }
+            window.contentView = view; window.makeKeyAndOrderFront(nil); dropWindow = window
+        }
+        NSApp.activate(ignoringOtherApps:true)
+        record("launched",["dragProbe":dragProbe])
     }
     @objc func clicked(_ sender:NSStatusBarButton) {
         guard let index = items.firstIndex(where: { $0.button === sender }) else { return }
@@ -115,7 +193,8 @@ let args = Array(CommandLine.arguments.dropFirst())
 if args.first == "--fixture" {
     let app = NSApplication.shared
     app.setActivationPolicy(.regular)
-    let fixture = Fixture(log:URL(fileURLWithPath:args.count > 1 ? args[1] : "/tmp/flowmori-qa-events.jsonl"))
+    let fixtureLog = args.count > 1 && !args[1].hasPrefix("--") ? args[1] : "/tmp/flowmori-qa-events.jsonl"
+    let fixture = Fixture(log:URL(fileURLWithPath:fixtureLog),dragProbe:args.contains("--drag-probe"))
     app.delegate = fixture; app.run()
 } else {
     do {
@@ -126,7 +205,7 @@ if args.first == "--fixture" {
             emit(["accessibility":AXIsProcessTrusted(),"screenCapture":CGPreflightScreenCaptureAccess(),"front":NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""])
         } else {
             guard AXIsProcessTrusted() else { throw NSError(domain:"QA",code:2,userInfo:[NSLocalizedDescriptionKey:"The script host needs Accessibility permission"]) }
-            let inputs = ["activate","menuDrag","menuMoveBefore","menuClick","press","pressDescription","set","key","click","drag"]
+            let inputs = ["activate","menuDrag","menuMoveBefore","menuClick","dragNative","press","pressDescription","probeDirect","set","key","click","drag"]
             if inputs.contains(operation), NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.loginwindow" {
                 throw NSError(domain:"QA",code:9,userInfo:[NSLocalizedDescriptionKey:"The desktop is locked; no test input was sent"])
             }
@@ -206,6 +285,161 @@ if args.first == "--fixture" {
                 }
                 let error = AXUIElementPerformAction(element,kAXPressAction as CFString)
                 emit(["errorCode":error.rawValue])
+            case "dragNative":
+                Task { @MainActor in
+                    do {
+                        let system = MenuBarSystem()
+                        await system.refreshOwnership()
+                        let entries = try system.entries()
+                        guard let id = request["id"] as? UInt32, let entry = entries.first(where: { $0.id == id }), entry.bundleID == fixtureID else {
+                            throw NSError(domain:"QA",code:8,userInfo:[NSLocalizedDescriptionKey:"Only fixture icons can be dragged"])
+                        }
+                        guard let point = request["point"] as? [Double], point.count == 2 else { throw NSError(domain:"QA",code:6) }
+                        let command = request["command"] as? Bool ?? false
+                        let end = CGPoint(x:point[0],y:point[1])
+                        let start = CGPoint(x:entry.frame.midX,y:entry.frame.midY)
+                        let source = CGEventSource(stateID:.hidSystemState)
+                        func event(_ type:CGEventType,_ location:CGPoint) -> CGEvent? {
+                            guard let value = CGEvent(mouseEventSource:source,mouseType:type,mouseCursorPosition:location,mouseButton:.left) else { return nil }
+                            value.flags = command ? .maskCommand : []
+                            value.setIntegerValueField(.mouseEventWindowUnderMousePointer,value:Int64(entry.id))
+                            value.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent,value:Int64(entry.id))
+                            if command, let field = CGEventField(rawValue:0x33) { value.setIntegerValueField(field,value:Int64(entry.id)) }
+                            value.setIntegerValueField(.eventTargetUnixProcessID,value:Int64(entry.pid))
+                            value.setIntegerValueField(.eventSourceUserData,value:0x464D4F52)
+                            value.setIntegerValueField(.mouseEventClickState,value:1)
+                            return value
+                        }
+                        guard let down = event(.leftMouseDown,start), let up = event(.leftMouseUp,end) else { throw NSError(domain:"QA",code:11) }
+                        down.post(tap:.cgSessionEventTap); usleep(120_000)
+                        for step in 1...16 {
+                            let part = CGFloat(step)/16
+                            guard let motion = event(.leftMouseDragged,CGPoint(x:start.x+(end.x-start.x)*part,y:start.y+(end.y-start.y)*part)) else { continue }
+                            motion.post(tap:.cgSessionEventTap); usleep(35_000)
+                        }
+                        up.post(tap:.cgSessionEventTap); usleep(800_000)
+                        let after = try system.entries()
+                        emit(["start":[start.x,start.y],"end":[end.x,end.y],"command":command,
+                              "layout":after.map { ["id":$0.id,"bundle":$0.bundleID,"title":$0.title,"frame":[Double($0.frame.minX),Double($0.frame.minY),Double($0.frame.width),Double($0.frame.height)]] as [String:Any] }])
+                        exit(0)
+                    } catch { emit(["error":error.localizedDescription]); exit(1) }
+                }
+                RunLoop.main.run()
+            case "sampleLayout":
+                Task { @MainActor in
+                    do {
+                        let duration = request["duration"] as? Double ?? 6
+                        let interval = request["intervalMs"] as? Int ?? 50
+                        let system = MenuBarSystem()
+                        await system.refreshOwnership()
+                        let baseline = try system.entries().filter { allowedBundles.contains($0.bundleID) }
+                        let baseFrames = Dictionary(uniqueKeysWithValues: baseline.map { ($0.id,$0.frame) })
+                        let baseIDs = Set(baseFrames.keys)
+                        var changes: [[String:Any]] = []
+                        var samples = 0
+                        let started = Date()
+                        while Date().timeIntervalSince(started) < duration {
+                            let now = try system.entries().filter { allowedBundles.contains($0.bundleID) }
+                            let ids = Set(now.map(\.id))
+                            for entry in now where baseIDs.contains(entry.id) {
+                                guard let base = baseFrames[entry.id] else { continue }
+                                if abs(entry.frame.minX-base.minX) > 0.5 || abs(entry.frame.minY-base.minY) > 0.5 {
+                                    changes.append(["t":Date().timeIntervalSince(started),"id":entry.id,
+                                                    "x":entry.frame.minX,"y":entry.frame.minY,
+                                                    "baseX":base.minX,"baseY":base.minY])
+                                }
+                            }
+                            for missing in baseIDs.subtracting(ids) {
+                                changes.append(["t":Date().timeIntervalSince(started),"id":missing,"missing":true])
+                            }
+                            samples += 1
+                            usleep(useconds_t(max(10, interval) * 1000))
+                        }
+                        emit(["baseline":baseline.map { ["id":$0.id,"title":$0.title,"frame":[Double($0.frame.minX),Double($0.frame.minY),Double($0.frame.width),Double($0.frame.height)]] as [String:Any] },
+                              "samples":samples,"duration":Date().timeIntervalSince(started),
+                              "changeCount":changes.count,"changes":Array(changes.prefix(100))])
+                        exit(0)
+                    } catch { emit(["error":error.localizedDescription]); exit(1) }
+                }
+                RunLoop.main.run()
+            case "probeDirect":
+                guard bundle == fixtureID, let role = request["role"] as? String, let text = request["text"] as? String, !text.isEmpty else {
+                    throw NSError(domain:"QA",code:7,userInfo:[NSLocalizedDescriptionKey:"probeDirect requires fixture bundle, role and text"])
+                }
+                Task { @MainActor in
+                    do {
+                        let system = MenuBarSystem()
+                        await system.refreshOwnership()
+                        let initial = try system.entries()
+                        let initialFrames = Dictionary(uniqueKeysWithValues: initial.map { ($0.id,$0.frame) })
+                        guard let extrasValue = attribute(root,kAXExtrasMenuBarAttribute), CFGetTypeID(extrasValue) == AXUIElementGetTypeID() else {
+                            throw NSError(domain:"QA",code:10,userInfo:[NSLocalizedDescriptionKey:"No AXExtrasMenuBar"])
+                        }
+                        let extras = unsafeBitCast(extrasValue,to:AXUIElement.self)
+                        guard let axTarget = findAX(extras,role,text) else {
+                            throw NSError(domain:"QA",code:4,userInfo:[NSLocalizedDescriptionKey:"Missing collapsed extras item: \(text)"])
+                        }
+                        var actionValue: CFArray?
+                        let actionError = AXUIElementCopyActionNames(axTarget,&actionValue)
+                        let actionNames = actionValue as? [String] ?? []
+                        let actionName = request["action"] as? String ?? (kAXPressAction as String)
+                        var samples: [[String:Any]] = [], changes: [[String:Any]] = []
+                        let started = Date()
+                        func sample(_ phase:String,_ time:Double) {
+                            guard let entries = try? system.entries() else { return }
+                            samples.append(["t":time,"phase":phase,
+                                            "items":entries.filter { allowedBundles.contains($0.bundleID) }.map { ["id":$0.id,"x":$0.frame.minX] }])
+                            for entry in entries {
+                                guard let base = initialFrames[entry.id], abs(entry.frame.minX-base.minX) > 0.5, changes.count < 80 else { continue }
+                                changes.append(["t":time,"phase":phase,"id":entry.id,"x":entry.frame.minX,"base":base.minX])
+                            }
+                        }
+                        sample("before",0)
+                        let pressError = AXUIElementPerformAction(axTarget,actionName as CFString)
+                        for _ in 1...60 { usleep(50_000); sample("during",Date().timeIntervalSince(started)) }
+                        let during = axState(root)
+                        let visibleDuring = Array(system.visibleWindows(pid:target.processIdentifier))
+                        let windowInfo = system.windowInfo(onScreenOnly:true)
+                        let visibleDetails = windowInfo.compactMap { value -> [String:Any]? in
+                            guard let id = value[kCGWindowNumber as String] as? UInt32, visibleDuring.contains(id) else { return nil }
+                            var details: [String:Any] = ["id":id]
+                            if let bounds = value[kCGWindowBounds as String] { details["bounds"] = bounds }
+                            if let layer = value[kCGWindowLayer as String] { details["layer"] = layer }
+                            if let name = value[kCGWindowName as String] { details["name"] = name }
+                            return details
+                        }
+                        let menuOpen = !((during["menuItems"] as? [String]) ?? []).isEmpty || !((during["menus"] as? [String]) ?? []).isEmpty
+                        let popoverOpen = during["popover"] as? Bool ?? false
+                        func escape() {
+                            let source = CGEventSource(stateID:.hidSystemState)
+                            for down in [true,false] {
+                                CGEvent(keyboardEventSource:source,virtualKey:53,keyDown:down)?.post(tap:.cghidEventTap)
+                                usleep(70_000)
+                            }
+                        }
+                        if menuOpen {
+                            target.activate(options:[])
+                            usleep(120_000)
+                            escape()
+                        } else if popoverOpen {
+                            if let close = findAX(root,"AXButton","关闭测试弹窗") {
+                                _ = AXUIElementPerformAction(close,kAXPressAction as CFString)
+                            } else {
+                                target.activate(options:[]); usleep(120_000); escape()
+                            }
+                        }
+                        usleep(600_000)
+                        let after = axState(root)
+                        sample("after",Date().timeIntervalSince(started))
+                        emit(["target":text,"role":role,"action":actionName,"actions":actionNames,"actionError":actionError.rawValue,
+                              "pressError":pressError.rawValue,"during":during,"after":after,
+                              "visibleDuring":visibleDuring.map { Int($0) },"visibleDetails":visibleDetails,
+                              "sampledSeconds":Date().timeIntervalSince(started),
+                              "changeCount":changes.count,"changes":changes,"samples":samples])
+                        exit(0)
+                    } catch { emit(["error":error.localizedDescription]); exit(1) }
+                }
+                RunLoop.main.run()
             case "key":
                 guard allowedBundles.contains(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "") else { throw NSError(domain:"QA",code:5,userInfo:[NSLocalizedDescriptionKey:"Focus is outside allowed test apps"]) }
                 let key = CGKeyCode(request["keyCode"] as? Int ?? 53), flags = CGEventFlags(rawValue:request["flags"] as? UInt64 ?? 0)

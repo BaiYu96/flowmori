@@ -11,7 +11,10 @@ struct MenuBarEntry: Identifiable, Equatable {
     let name: String
     let title: String
     let frame: CGRect // Quartz global coordinates (top-left origin)
+    let supportedActions: [String]
     var icon: NSImage? { NSRunningApplication(processIdentifier:ownerPID)?.icon }
+    var leftDirectAvailable: Bool { supportedActions.contains(kAXPressAction as String) }
+    var rightDirectAvailable: Bool { supportedActions.contains("AXShowMenu") }
     var ownershipResolved: Bool { ownerPID > 0 }
     var protected: Bool {
         ["com.apple.controlcenter", "com.apple.systemuiserver", "com.apple.notificationcenterui", "com.apple.Spotlight"].contains(bundleID)
@@ -20,15 +23,18 @@ struct MenuBarEntry: Identifiable, Equatable {
 
 enum MenuBarError: LocalizedError {
     case unavailable, permission, disappeared, busy, moveFailed, unsafePosition, protectedItem, operationCancelled, operationTimedOut
+    case directUnavailable(String), directActivationFailed(String)
     var errorDescription: String? {
         switch self {
         case .unavailable: return "此系统构建尚未完成菜单栏兼容验证，或所需接口不可用。当前验证范围：macOS 26.6.2（25G83）。"
         case .permission: return "请先授予辅助功能权限，才能操作其他应用的菜单栏图标。"
-        case .disappeared: return "这个图标已退出或发生变化，已展开菜单栏，请重试。"
+        case .disappeared: return "这个图标已退出或发生变化，请重试。"
         case .busy: return "请先完成当前菜单栏操作。"
-        case .operationCancelled: return "应用或桌面状态发生变化，已停止当前操作并展开菜单栏。请检查图标位置后重新启用收纳。"
-        case .operationTimedOut: return "操作超过两分钟，已停止收纳并展开菜单栏。关闭原菜单后可重新启用收纳。"
-        case .moveFailed: return "图标未能移动到预期位置，已停止收纳并展开菜单栏。"
+        case .operationCancelled: return "应用或桌面状态发生变化，已停止当前操作。请重试。"
+        case .operationTimedOut: return "菜单操作超过两分钟，请关闭原菜单后重试。"
+        case .moveFailed: return "菜单栏操作未能完成，请展开菜单栏后重试。"
+        case .directUnavailable(let reason): return reason
+        case .directActivationFailed(let reason): return reason
         case .unsafePosition: return "菜单栏可见空间不足，已展开。请减少常驻系统图标后重试。"
         case .protectedItem: return "系统状态图标无法安全保留在常驻区，已展开。"
         }
@@ -118,7 +124,8 @@ final class MenuBarSystem {
             let name = own ? "Flowmori" : (identity?.owner.name ?? (ownerPID == 0 ? "待识别图标" : app.localizedName ?? "应用 \(pid)"))
             let bundle = own ? "app.flowmori.Flowmori" : (identity?.owner.bundleID ?? (ownerPID == 0 ? "" : app.bundleIdentifier ?? ""))
             return MenuBarEntry(id:id,pid:pid,ownerPID:ownerPID,bundleID:bundle,name:name,
-                                title:identity?.label ?? rawTitle,frame:rect)
+                                title:identity?.label ?? rawTitle,frame:rect,
+                                supportedActions:identity?.actions ?? [])
         }.sorted { $0.frame.minX < $1.frame.minX }
     }
     func claimOwnStatusWindow(_ id:CGWindowID) { ownWindows.insert(id) }
@@ -493,6 +500,15 @@ final class MenuBarSystem {
               let entry = try system.entries().first(where: { $0.id == id }) else { throw MenuBarError.unsafePosition }
         try await system.drag(entry,before:neighborID)
     }
+    /// Explicit user exit for icons that cannot be activated directly. This is
+    /// never an automatic fallback for a failed in-panel activation.
+    func expandMenuBar() {
+        guard !operating else { onMessage?(MenuBarError.busy.localizedDescription); return }
+        closePanel?()
+        showAll()
+        message = "已展开菜单栏，请直接在菜单栏操作图标。"
+        onMessage?(message)
+    }
     /// User-requested/global organization is separate from temporary menu restore.
     func collectAll() {
         guard !operating, system.available, system.sessionAllowsInput else { return }
@@ -574,189 +590,86 @@ final class MenuBarSystem {
     }
     func activate(_ entry: MenuBarEntry, right: Bool) {
         guard !operating, transaction.begin(entry.id) else { onMessage?(MenuBarError.busy.localizedDescription); return }
+        let name = entry.title.isEmpty ? entry.name : entry.title
+        guard !entry.protected else { transaction.fail(); onMessage?(MenuBarError.protectedItem.localizedDescription); return }
+        guard entry.ownershipResolved else { transaction.fail(); onMessage?("正在识别「\(name)」所属应用，请稍后重试。"); return }
+        if right && !entry.rightDirectAvailable {
+            transaction.fail()
+            onMessage?("「\(name)」暂不支持在收纳盒内直接右键操作。请点击「展开菜单栏」后手动操作。")
+            return
+        }
+        if !right && !entry.leftDirectAvailable {
+            transaction.fail()
+            onMessage?("「\(name)」暂不支持在收纳盒内直接操作。请点击「展开菜单栏」后手动操作。")
+            return
+        }
         operating = true
         lastOperationOutcome = "running"
         closePanel?()
         operation = Task { [weak self] in
             guard let self else { return }
-            do { try await self.perform(entry,right:right); self.lastOperationOutcome = "completed" }
-            catch is CancellationError {
-                self.lastOperationOutcome = "cancelled"; self.transaction.fail(); self.fail(MenuBarError.operationCancelled)
+            do {
+                try await self.performDirect(entry,right:right)
+                self.lastOperationOutcome = "completed"
+            } catch is CancellationError {
+                self.lastOperationOutcome = "cancelled"; self.transaction.fail(); self.failDirect(MenuBarError.operationCancelled)
+            } catch MenuBarError.operationTimedOut {
+                self.lastOperationOutcome = "timedOut"; self.transaction.fail(); self.failDirect(MenuBarError.operationTimedOut)
+            } catch {
+                self.lastOperationOutcome = "failed"; self.transaction.fail(); self.failDirect(error)
             }
-            catch MenuBarError.operationTimedOut {
-                self.lastOperationOutcome = "timedOut"; self.transaction.fail(); self.fail(MenuBarError.operationTimedOut)
-            }
-            catch { self.lastOperationOutcome = "failed"; self.transaction.fail(); self.fail(error) }
             self.transaction.finish(); self.operating = false; self.operation = nil; self.refresh()
         }
     }
-    private func perform(_ entry: MenuBarEntry, right: Bool) async throws {
-        operationStage = "validate"
-        guard !entry.protected else { throw MenuBarError.protectedItem }
+    /// Direct activation uses the original app's live AX status item. It never
+    /// moves the icon: a successful action is proven by a newly visible owner
+    /// window (menu/popover), not by the AX return code alone.
+    private func performDirect(_ entry: MenuBarEntry,right:Bool) async throws {
+        operationStage = right ? "direct-right" : "direct-left"
         guard AXIsProcessTrusted(), system.available else { throw MenuBarError.permission }
-        guard system.valid(entry), let dividerID, let controlID else { throw MenuBarError.disappeared }
-        operationStage = "prepare"
-        let wasCollapsed = !expanded
-        // Snapshot logical order before expanding: the system may rearrange
-        // notch-overlapping windows in the expanded geometry.
-        let originalOrder = try system.entries()
-        guard let originalIndex = originalOrder.firstIndex(where: { $0.id == entry.id }) else { throw MenuBarError.disappeared }
-        let returnNeighbor = originalOrder.dropFirst(originalIndex+1).first(where: { abs($0.frame.midY-entry.frame.midY) < 3 })?.id ?? dividerID
-        showAll()
-        try await system.waitForStableLayout()
-        guard let original = system.frame(entry.id), let anchor = system.frame(controlID) else { throw MenuBarError.disappeared }
-        // Persist only recovery metadata, never screenshots or clipboard contents.
-        let journal: [String:Any] = ["pid":entry.pid,"window":entry.id,"bundle":entry.bundleID,
-                                    "originalX":original.minX,"created":Date().timeIntervalSince1970]
-        try JSONSerialization.data(withJSONObject:journal).write(to:recoveryFile,options:.atomic)
-        // Prefer the rightmost non-system slot. Removing an item from the hidden
-        // group can reflow notch-adjacent slots, so our own control is not a
-        // reliable insertion target merely because its current frame is visible.
-        let candidates = try system.entries().filter {
-            $0.id != entry.id && $0.id != dividerID && !$0.protected && $0.ownershipResolved &&
-            abs($0.frame.midY-anchor.midY) < 3
-        }.sorted { $0.frame.maxX > $1.frame.maxX }
-        guard let destination = candidates.first(where: {
-            isReachable(CGRect(x:$0.frame.maxX-original.width,y:original.minY,width:original.width,height:original.height))
-        }) else { throw MenuBarError.unsafePosition }
-        operationStage = "extract"
-        try await system.drag(entry,to:CGPoint(x:destination.frame.maxX-1,y:destination.frame.midY))
-        try await system.waitForStableLayout()
-        guard let moved = system.frame(entry.id), let split = system.frame(dividerID), moved.minX >= split.maxX - 2 else { throw MenuBarError.moveFailed }
-        if wasCollapsed {
-            operationStage = "collapse"
-            system.invalidateOwnershipScan()
-            layout.changed(); divider.length = min(10000,max(500,(NSScreen.screens.map(\.frame.width).max() ?? 2000) * 2)); expanded = false
-            try await system.waitForStableLayout()
+        guard system.sessionAllowsInput else { throw MenuBarError.operationCancelled }
+        guard let current = try system.entries().first(where: {
+            $0.id == entry.id && $0.ownerPID == entry.ownerPID && $0.bundleID == entry.bundleID
+        }) else { throw MenuBarError.disappeared }
+        let name = current.title.isEmpty ? current.name : current.title
+        let owner = MenuBarOwner(pid:current.ownerPID,bundleID:current.bundleID,name:current.name)
+        let before = directWindows(current)
+        let activation = MenuAccessibilityCatalog.activate(owner,frame:current.frame,label:current.title,right:right)
+        returnDetail = "direct=\(right ? "right" : "left") action=\(activation.action) ax=\(activation.error.rawValue) supported=\(activation.supported)"
+        guard activation.performed else {
+            throw MenuBarError.directUnavailable("「\(name)」暂不支持在收纳盒内直接\(right ? "右键操作" : "打开")。请点击「展开菜单栏」后手动操作。")
         }
-        guard let clickable = system.frame(entry.id), isReachable(clickable) else { throw MenuBarError.unsafePosition }
-        operationStage = "click"
-        transaction.didMove()
-        func visible() -> Set<UInt32> { system.visibleWindows(pid:entry.ownerPID).union(system.visibleWindows(pid:entry.pid)) }
-        let previousWindows = visible()
-        try await system.click(entry,right:right)
-        operationStage = "await-menu-close"
-        try await Task.sleep(for:.milliseconds(400))
-        var opened = visible().subtracting(previousWindows)
-        let deadline = Date().addingTimeInterval(120)
-        if opened.isEmpty { try await Task.sleep(for:.milliseconds(400)); opened = visible().subtracting(previousWindows) }
-        while !opened.isEmpty && !opened.isDisjoint(with:visible()) {
+        operationStage = "direct-await-ui"
+        var opened = Set<UInt32>()
+        for _ in 0..<20 {
             try Task.checkCancellation()
-            guard Date() < deadline else { throw MenuBarError.operationTimedOut }
+            guard system.sessionAllowsInput else { throw MenuBarError.operationCancelled }
+            let now = directWindows(current)
+            opened = now.subtracting(before)
+            if !opened.isEmpty { break }
+            try await Task.sleep(for:.milliseconds(100))
+        }
+        guard !opened.isEmpty else {
+            throw MenuBarError.directActivationFailed("「\(name)」没有显示可访问的菜单或弹窗。此图标暂不支持收纳盒内直接操作，请展开菜单栏后手动操作。")
+        }
+        operationStage = "direct-menu-open"
+        let deadline = Date().addingTimeInterval(120)
+        while !opened.isEmpty && !opened.isDisjoint(with:directWindows(current)) {
+            try Task.checkCancellation()
             guard AXIsProcessTrusted() else { throw MenuBarError.permission }
             guard system.sessionAllowsInput else { throw MenuBarError.operationCancelled }
+            guard Date() < deadline else { throw MenuBarError.operationTimedOut }
+            if let app = NSRunningApplication(processIdentifier:current.ownerPID), app.isTerminated { throw MenuBarError.disappeared }
             try await Task.sleep(for:.milliseconds(250))
         }
-        transaction.restore()
-        operationStage = "restore-expand"
-        showAll()
-        try await system.waitForStableLayout()
-        // A disappearing app needs no synthetic input; its icon no longer exists.
-        if system.valid(entry) {
-            let neighborID = system.frame(returnNeighbor) != nil ? returnNeighbor : dividerID
-            returnPlacementTrace.removeAll()
-            var shift: CGFloat = 0
-            if let neighbor = system.frame(neighborID), let screen = control.button?.window?.screen,
-               let left = screen.auxiliaryTopLeftArea, let right = screen.auxiliaryTopRightArea {
-                shift = MenuWindowResolver.notchReturnShift(neighbor:neighbor,sourceWidth:original.width,
-                    leftEdge:left.maxX,rightEdge:right.minX)
-                operationStage = shift > 0 ? "return-shift" : "return-no-shift"
-                if shift > 0 {
-                    system.invalidateOwnershipScan()
-                    divider.length = 18+shift
-                    try await system.waitForStableLayout()
-                }
-            }
-            let returnSource = system.frame(entry.id)
-            let returnNeighborFrame = system.frame(neighborID)
-            returnDetail = "wasCollapsed=\(wasCollapsed) neighbor=\(neighborID) shift=\(Int(shift)) dividerWidth=\(Int(divider.length)) source=\(returnSource.map(NSStringFromRect) ?? "missing") neighborFrame=\(returnNeighborFrame.map(NSStringFromRect) ?? "missing")"
-            system.placementObserver = { [weak self] source, neighbor in
-                guard let self, self.returnPlacementTrace.count < 12 else { return }
-                self.returnPlacementTrace.append(["source":source.map(NSStringFromRect) ?? "missing",
-                                                  "neighbor":neighbor.map(NSStringFromRect) ?? "missing"])
-            }
-            defer { system.placementObserver = nil }
-            var restoredOrder = false
-            operationStage = "return-drag"
-            do {
-                try await system.drag(entry,before:neighborID)
-            } catch MenuBarError.moveFailed {
-                // The temporary divider reservation keeps the slot outside the
-                // cutout, but the compressed layout can reject the final drag.
-                // Release the reservation and retry once in the natural layout.
-                if shift > 0 {
-                    operationStage = "return-drag-flat"
-                    system.invalidateOwnershipScan()
-                    divider.length = 18
-                    try await system.waitForStableLayout()
-                    do {
-                        try await system.drag(entry,before:neighborID)
-                    } catch MenuBarError.moveFailed {
-                        system.placementObserver = nil
-                        try await restoreOriginalOrder(originalOrder)
-                        restoredOrder = true
-                    }
-                } else {
-                    system.placementObserver = nil
-                    try await restoreOriginalOrder(originalOrder)
-                    restoredOrder = true
-                }
-            }
-            if !restoredOrder {
-                operationStage = "return-verify"
-                guard let returned = system.frame(entry.id), let bar = system.frame(dividerID), returned.maxX <= bar.minX + 3 else { throw MenuBarError.moveFailed }
-                if let neighbor = system.frame(returnNeighbor), abs(returned.maxX-neighbor.minX) > 3 { throw MenuBarError.moveFailed }
-            }
-        }
-        try FileManager.default.removeItem(at:recoveryFile)
-        operationStage = "completed"
-        operating = false
-        if wasCollapsed {
-            for _ in 0..<10 {
-                collapse()
-                if !expanded { break }
-                try await Task.sleep(for:.milliseconds(150))
-            }
-            guard !expanded else { operating = true; throw MenuBarError.moveFailed }
-        } else { showAll() }
+        operationStage = "direct-completed"
     }
-    /// Notch reflow can invert collapsed neighbors (for example 225 and 381),
-    /// making the strict expanded-adjacency check impossible. As a last resort,
-    /// re-collect the manageable icons in the recorded logical order and verify
-    /// the resulting collapsed order.
-    private func restoreOriginalOrder(_ order:[MenuBarEntry]) async throws {
-        guard let split = dividerID, let control = controlID else { throw MenuBarError.disappeared }
-        operationStage = "return-reorder"
-        showAll()
-        try await system.waitForStableLayout()
-        var current = try system.entries()
-        let byID = Dictionary(uniqueKeysWithValues: current.map { ($0.id,$0) })
-        let expectedEntries = order.compactMap { byID[$0.id] }.filter {
-            $0.id != split && $0.id != control && !$0.protected && $0.ownershipResolved &&
-            $0.ownerPID != ownPIDForCollection
-        }
-        for item in expectedEntries {
-            try Task.checkCancellation()
-            guard system.valid(item) else { continue }
-            guard let rect = system.frame(item.id), let bar = system.frame(split) else { continue }
-            // Moving the divider already collected everything to its left.
-            if rect.maxX <= bar.minX+3 { continue }
-            try await system.drag(item,before:split)
-        }
-        try await system.waitForStableLayout()
-        operating = false
-        for _ in 0..<5 {
-            collapse()
-            if !expanded { break }
-            try await Task.sleep(for:.milliseconds(120))
-        }
-        operating = true
-        guard !expanded else { throw MenuBarError.moveFailed }
-        try await system.waitForStableLayout()
-        current = try system.entries()
-        let expected = expectedEntries.map(\.id)
-        let actual = current.filter { expected.contains($0.id) }.map(\.id)
-        guard actual == expected else { throw MenuBarError.moveFailed }
+    private func directWindows(_ entry:MenuBarEntry) -> Set<UInt32> {
+        system.visibleWindows(pid:entry.ownerPID).union(system.visibleWindows(pid:entry.pid))
+    }
+    private func failDirect(_ error:Error) {
+        message = error.localizedDescription
+        onMessage?(message)
     }
     private func isReachable(_ rect: CGRect) -> Bool {
         guard let primary = NSScreen.screens.first else { return false }

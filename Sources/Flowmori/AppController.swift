@@ -8,6 +8,7 @@ import OSLog
     let hotkeys = HotkeyManager()
     let pins = PinController()
     let capture = CaptureService()
+    let annotationEditor = AnnotationEditorController()
     let dataDirectory: URL
     let statusItem: NSStatusItem
     var clipboard: ClipboardService?
@@ -51,10 +52,15 @@ import OSLog
         collectionPanel = CollectionPanelController(manager:menuManager,settings:settings,statusItem:statusItem)
         collectionPanel.onSettings = { [weak self] in self?.showSettings() }
         capture.beforeCapture = { [weak self] in self?.historyPanel?.close(restore:false); self?.collectionPanel.close() }
-        capture.onImage = { [weak self] data in
+        annotationEditor.onCopy = { [weak self] png in
             guard let self else { return }
-            if let clipboard = self.clipboard { clipboard.acceptScreenshot(data) }
-            else { NSPasteboard.general.clearContents(); NSPasteboard.general.setData(data,forType:.png); self.toast("截图已复制") }
+            if let clipboard = self.clipboard { clipboard.acceptScreenshot(png) }
+            else { NSPasteboard.general.clearContents(); NSPasteboard.general.setData(png,forType:.png); self.toast("截图已复制") }
+        }
+        annotationEditor.onPin = { [weak self] image in self?.pins.pin(image) }
+        annotationEditor.onMessage = { [weak self] message in self?.toast(message) }
+        capture.onImage = { [weak self] image, restore in
+            self?.annotationEditor.present(image, restoreApplication:restore)
         }
         capture.onMessage = { [weak self] message in self?.toast(message) }
         pins.onCopy = { [weak self] data in
@@ -93,7 +99,9 @@ import OSLog
         case .history:
             collectionPanel.close()
             if let historyPanel { historyPanel.toggle() } else { toast(startupError ?? "历史暂不可用") }
-        case .capture: capture.begin()
+        case .capture:
+            if annotationEditor.isPresenting { annotationEditor.focus(); toast("请先完成或取消当前截图标注。") }
+            else { capture.begin() }
         case .pin:
             if let image = clipboard?.currentImage() { pins.pin(image) }
             else if clipboard == nil, let image = NSImage(pasteboard:.general) { pins.pin(image) }
@@ -175,7 +183,7 @@ import OSLog
         catch { logger.error("Could not write diagnostic heartbeat") }
     }
     func stop() {
-        capture.cancel(); clipboard?.stop(); menuManager.stop(); pins.closeAll(); hotkeys.unregisterAll()
+        capture.cancel(); annotationEditor.close(); clipboard?.stop(); menuManager.stop(); pins.closeAll(); hotkeys.unregisterAll()
         collectionPanel.close(); historyPanel?.close(restore:false)
         refreshTimer?.invalidate(); diagnosticTimer?.invalidate(); toastTask?.cancel()
         for observer in systemObservers { NotificationCenter.default.removeObserver(observer); NSWorkspace.shared.notificationCenter.removeObserver(observer) }
