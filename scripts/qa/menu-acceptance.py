@@ -216,13 +216,23 @@ def main():
         press_text(APP, '展开菜单栏', 'AXButton')
         expanded = wait_expanded()
         attempt['expandedExit'] = expanded
-        # Return the fixture to the collapsed state for the next run.
-        show_panel()
-        press_text(APP, '收纳全部', 'AXButton')
-        after = wait_collapsed()
-        check_unchanged(before, after)
+        attempt['verifiedExit'] = True
         attempt['unsupportedReason'] = 'AXShowMenu is unsupported; the item exposes only AXPress'
         attempt['passed'] = False
+        # Return the fixture to the collapsed state for the next run. The panel
+        # can still be animating closed after the explicit exit, so retry.
+        time.sleep(1)
+        for _ in range(5):
+            show_panel()
+            try:
+                press_text(APP, '收纳全部', 'AXButton', timeout=5)
+                break
+            except RuntimeError:
+                time.sleep(1)
+        else:
+            raise RuntimeError('Could not reopen the collection panel to restore the fixture')
+        after = wait_collapsed()
+        check_unchanged(before, after)
         print('Right: direct right-click unsupported; explicit 展开菜单栏 exit verified', flush=True)
     except Exception as error:
         if proof:
