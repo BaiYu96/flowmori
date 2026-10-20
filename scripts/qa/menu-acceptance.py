@@ -90,7 +90,7 @@ def show_panel():
 
 def open_panel():
     show_panel()
-    return control(APP, 'Flowmori QA, Flowmori QA Normal')
+    return control(APP, '直接打开 Flowmori QA Normal')
 
 def wait_collapsed(timeout=36):
     deadline = time.monotonic() + timeout
@@ -174,7 +174,7 @@ def main():
             proof.append(attempt)
             sampler = start_layout_sampler()
             try:
-                press_text(APP, 'Flowmori QA, Flowmori QA ' + kind, 'AXButton')
+                press_text(APP, '直接打开 Flowmori QA ' + kind, 'AXButton')
                 if kind == 'Popover':
                     press_text(FIXTURE, '关闭测试弹窗', 'AXButton', timeout=20)
                 else:
@@ -199,7 +199,7 @@ def main():
         before = fixture_items()
         attempt = {'kind': 'Right', 'before': before, 'direct': False, 'supported': False}
         proof.append(attempt)
-        button = control(APP, 'Flowmori QA, Flowmori QA Right')
+        button = control(APP, '直接打开 Flowmori QA Right')
         x, y, width, height = button['frame']
         request({'op': 'click', 'point': [x+width/2, y+height/2], 'right': True})
         time.sleep(.5)
