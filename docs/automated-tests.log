@@ -1,0 +1,113 @@
+[0/1] Planning build
+Building for debugging...
+[0/5] Write sources
+[1/5] Write swift-version--1AB21518FC5DEDBE.txt
+[3/7] Emitting module Flowmori
+[4/7] Compiling Flowmori MenuBarBackend.swift
+[5/11] Compiling Flowmori main.swift
+[6/11] Compiling Flowmori SettingsView.swift
+[7/11] Compiling Flowmori CollectionPanel.swift
+[8/11] Compiling Flowmori AppController.swift
+[8/13] Write Objects.LinkFileList
+[9/13] Linking Flowmori
+[10/13] Applying Flowmori
+[12/14] Emitting module FlowmoriPlatformTests
+[12/14] Write Objects.LinkFileList
+[13/14] Linking FlowmoriPackageTests
+Build complete! (4.25s)
+◇ Test run started.
+↳ Testing Library Version: 1902
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite BehaviorTests started.
+◇ Suite HistoryStoreTests started.
+◇ Suite MenuWindowResolverTests started.
+◇ Suite ProductMigrationTests started.
+◇ Suite ClipboardIntegrationTests started.
+◇ Test testSQLSpecialCharactersAndUnicodeRoundTrip() started.
+◇ Test testMenuOperationsCannotOverlapAndRecoverAfterFailure() started.
+◇ Test testRetinaCropFlipsOriginAndPreservesPixels() started.
+◇ Test testOrphanFilesRemovedOnReopen() started.
+◇ Test testSensitiveAndTransientAndFilesAreNotRecorded() started.
+◇ Test testVeryWideAndTallPinsRemainZoomable() started.
+◇ Test testSelectionIsClippedToOneScreen() started.
+◇ Test testPersistsTextAndRichRepresentationsAcrossReopen() started.
+◇ Test testImagePersistsAndPruningRemovesPayloadFile() started.
+◇ Test testOversizedPayloadDoesNotEnterDatabase() started.
+◇ Test testPopupNeverExtendsOutsideVisibleFrame() started.
+◇ Test testPinFitsSmallerReplacementDisplayWithoutDistortion() started.
+◇ Test testDedupUpdatesFormatAndOrderButKeepsFavorite() started.
+◇ Test testClearPreservesFavoritesAndCleansDeletedImages() started.
+◇ Test testDeletionIsIdempotent() started.
+◇ Test testUnfavoritingHonorsCurrentLimit() started.
+◇ Test testRetentionCountsOnlyNonFavorites() started.
+◇ Test ownershipSnapshotAcceptsReorderedEnumerationButRejectsReplacement() started.
+◇ Test testExternalDisplayWithNegativeOriginAndDifferentScale() started.
+◇ Test missingOrUnchangingLayoutStopsPlacement() started.
+◇ Test nativeReflowIsReconciledFromObservedNeighborPosition() started.
+◇ Test unrelatedWindowNumberNeverOverridesOwnershipOrGeometry() started.
+◇ Test ownershipScanRejectsAMoveAndReturnEvenWhenFinalCoordinatesMatch() started.
+◇ Test alreadyRestoredLayoutDoesNotSendAnotherMove() started.
+◇ Test ownershipScanRejectsMovedWindowsInsteadOfUsingStaleCoordinates() started.
+◇ Test freshInstallIsNotMistakenForMigration() started.
+◇ Test runningLegacyAndExistingDestinationNeverLoseData() started.
+◇ Test absentOrAmbiguousWindowsDoNotProduceAGuessedTarget() started.
+◇ Test preferencesPreserveNewValuesAndDisabledLoginIntent() started.
+◇ Test paddedWindowHeightIsAllowedButNotchOverlapIsRejected() started.
+◇ Test movesHistoryFavoritesFormatsImagesAndJournalTogether() started.
+◇ Test accessibilityButtonMatchesPaddedHostWindowOnly() started.
+◇ Test virtualAppKitWindowNumberDoesNotOverflowAndMatchesGeometry() started.
+◇ Test richTextRoundTripAndOwnCopyDeduplication() started.
+✔ Test testSensitiveAndTransientAndFilesAreNotRecorded() passed after 0.019 seconds.
+✔ Test testRetinaCropFlipsOriginAndPreservesPixels() passed after 0.021 seconds.
+✔ Test testMenuOperationsCannotOverlapAndRecoverAfterFailure() passed after 0.021 seconds.
+✔ Test testSelectionIsClippedToOneScreen() passed after 0.021 seconds.
+✔ Test testVeryWideAndTallPinsRemainZoomable() passed after 0.029 seconds.
+✔ Test testPinFitsSmallerReplacementDisplayWithoutDistortion() passed after 0.029 seconds.
+✔ Test testPopupNeverExtendsOutsideVisibleFrame() passed after 0.029 seconds.
+✔ Test ownershipSnapshotAcceptsReorderedEnumerationButRejectsReplacement() passed after 0.030 seconds.
+✔ Test testDeletionIsIdempotent() passed after 0.030 seconds.
+✔ Test testExternalDisplayWithNegativeOriginAndDifferentScale() passed after 0.030 seconds.
+✔ Test missingOrUnchangingLayoutStopsPlacement() passed after 0.030 seconds.
+✔ Test unrelatedWindowNumberNeverOverridesOwnershipOrGeometry() passed after 0.030 seconds.
+✔ Test nativeReflowIsReconciledFromObservedNeighborPosition() passed after 0.030 seconds.
+✔ Test ownershipScanRejectsAMoveAndReturnEvenWhenFinalCoordinatesMatch() passed after 0.030 seconds.
+✔ Test alreadyRestoredLayoutDoesNotSendAnotherMove() passed after 0.030 seconds.
+✔ Test testDedupUpdatesFormatAndOrderButKeepsFavorite() passed after 0.030 seconds.
+✔ Test freshInstallIsNotMistakenForMigration() passed after 0.030 seconds.
+✔ Test absentOrAmbiguousWindowsDoNotProduceAGuessedTarget() passed after 0.030 seconds.
+✔ Test testSQLSpecialCharactersAndUnicodeRoundTrip() passed after 0.031 seconds.
+✔ Test paddedWindowHeightIsAllowedButNotchOverlapIsRejected() passed after 0.030 seconds.
+✔ Test ownershipScanRejectsMovedWindowsInsteadOfUsingStaleCoordinates() passed after 0.030 seconds.
+✔ Test accessibilityButtonMatchesPaddedHostWindowOnly() passed after 0.030 seconds.
+✔ Test virtualAppKitWindowNumberDoesNotOverflowAndMatchesGeometry() passed after 0.030 seconds.
+✔ Test testUnfavoritingHonorsCurrentLimit() passed after 0.031 seconds.
+✔ Test testImagePersistsAndPruningRemovesPayloadFile() passed after 0.031 seconds.
+✔ Test testOversizedPayloadDoesNotEnterDatabase() passed after 0.031 seconds.
+✔ Suite BehaviorTests passed after 0.031 seconds.
+✔ Suite MenuWindowResolverTests passed after 0.031 seconds.
+✔ Test runningLegacyAndExistingDestinationNeverLoseData() passed after 0.031 seconds.
+✔ Test testOrphanFilesRemovedOnReopen() passed after 0.034 seconds.
+✔ Test testPersistsTextAndRichRepresentationsAcrossReopen() passed after 0.035 seconds.
+✔ Test preferencesPreserveNewValuesAndDisabledLoginIntent() passed after 0.034 seconds.
+✔ Test testClearPreservesFavoritesAndCleansDeletedImages() passed after 0.035 seconds.
+✔ Test movesHistoryFavoritesFormatsImagesAndJournalTogether() passed after 0.042 seconds.
+✔ Suite ProductMigrationTests passed after 0.042 seconds.
+✔ Test richTextRoundTripAndOwnCopyDeduplication() passed after 0.110 seconds.
+◇ Test confidentialFilesExcludedAppsAndPauseAreSkipped() started.
+✔ Test confidentialFilesExcludedAppsAndPauseAreSkipped() passed after 0.047 seconds.
+◇ Test rapidCopiesKeepEachChangeAndMergeRepeatedText() started.
+✔ Test rapidCopiesKeepEachChangeAndMergeRepeatedText() passed after 0.050 seconds.
+◇ Test screenshotPNGIsCopiedAndStored() started.
+✔ Test testRetentionCountsOnlyNonFavorites() passed after 0.234 seconds.
+✔ Suite HistoryStoreTests passed after 0.235 seconds.
+✔ Test screenshotPNGIsCopiedAndStored() passed after 0.047 seconds.
+◇ Test idlePollingKeepsWatchingWithoutInvalidatingViews() started.
+✔ Test idlePollingKeepsWatchingWithoutInvalidatingViews() passed after 0.097 seconds.
+◇ Test shortcutPreferencesPersistWithoutChangingDefaults() started.
+✔ Test shortcutPreferencesPersistWithoutChangingDefaults() passed after 0.052 seconds.
+◇ Test menuLayoutRefreshWaitsForTheLatestResizeAndCancelsOnStop() started.
+✔ Test menuLayoutRefreshWaitsForTheLatestResizeAndCancelsOnStop() passed after 0.716 seconds.
+◇ Test systemHotkeyConflictPreservesPreviousRegistration() started.
+✔ Test systemHotkeyConflictPreservesPreviousRegistration() passed after 0.032 seconds.
+✔ Suite ClipboardIntegrationTests passed after 1.158 seconds.
+✔ Test run with 41 tests in 5 suites passed after 1.158 seconds.

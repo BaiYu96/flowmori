@@ -1,0 +1,53 @@
+[0/1] Planning build
+Building for debugging...
+[0/5] Write sources
+[1/5] Write swift-version--1AB21518FC5DEDBE.txt
+[3/7] Compiling Flowmori MenuBarBackend.swift
+[4/7] Emitting module Flowmori
+[5/11] Compiling Flowmori CollectionPanel.swift
+[6/11] Compiling Flowmori AppController.swift
+[7/11] Compiling Flowmori SettingsView.swift
+[8/11] Compiling Flowmori main.swift
+[8/13] Write Objects.LinkFileList
+[9/13] Linking Flowmori
+[10/13] Applying Flowmori
+[12/14] Emitting module FlowmoriPlatformTests
+[12/14] Write Objects.LinkFileList
+[13/14] Linking FlowmoriPackageTests
+Build complete! (3.96s)
+◇ Test run started.
+↳ Testing Library Version: 1902
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite MenuCollectionTests started.
+◇ Suite MenuWindowResolverTests started.
+◇ Test alreadyRestoredLayoutDoesNotSendAnotherMove() started.
+◇ Test missingControlCannotGenerateMoves() started.
+◇ Test virtualAppKitWindowNumberDoesNotOverflowAndMatchesGeometry() started.
+◇ Test collectionKeepsSystemAndUnknownAndPreservesApplicationOrder() started.
+◇ Test unrelatedWindowNumberNeverOverridesOwnershipOrGeometry() started.
+◇ Test missingOrUnchangingLayoutStopsPlacement() started.
+◇ Test nativeReflowIsReconciledFromObservedNeighborPosition() started.
+◇ Test accessibilityButtonMatchesPaddedHostWindowOnly() started.
+◇ Test ownershipScanRejectsMovedWindowsInsteadOfUsingStaleCoordinates() started.
+◇ Test ownershipSnapshotAcceptsReorderedEnumerationButRejectsReplacement() started.
+◇ Test paddedWindowHeightIsAllowedButNotchOverlapIsRejected() started.
+◇ Test ownershipScanRejectsAMoveAndReturnEvenWhenFinalCoordinatesMatch() started.
+◇ Test temporaryAbsenceIsDifferentFromConflictOrReplacement() started.
+◇ Test absentOrAmbiguousWindowsDoNotProduceAGuessedTarget() started.
+✔ Test alreadyRestoredLayoutDoesNotSendAnotherMove() passed after 0.001 seconds.
+✔ Test nativeReflowIsReconciledFromObservedNeighborPosition() passed after 0.001 seconds.
+✔ Test collectionKeepsSystemAndUnknownAndPreservesApplicationOrder() passed after 0.001 seconds.
+✔ Test ownershipScanRejectsAMoveAndReturnEvenWhenFinalCoordinatesMatch() passed after 0.001 seconds.
+✔ Test virtualAppKitWindowNumberDoesNotOverflowAndMatchesGeometry() passed after 0.001 seconds.
+✔ Test ownershipScanRejectsMovedWindowsInsteadOfUsingStaleCoordinates() passed after 0.001 seconds.
+✔ Test missingControlCannotGenerateMoves() passed after 0.001 seconds.
+✔ Test temporaryAbsenceIsDifferentFromConflictOrReplacement() passed after 0.001 seconds.
+✔ Test missingOrUnchangingLayoutStopsPlacement() passed after 0.001 seconds.
+✔ Test ownershipSnapshotAcceptsReorderedEnumerationButRejectsReplacement() passed after 0.001 seconds.
+✔ Test unrelatedWindowNumberNeverOverridesOwnershipOrGeometry() passed after 0.001 seconds.
+✔ Test absentOrAmbiguousWindowsDoNotProduceAGuessedTarget() passed after 0.001 seconds.
+✔ Test accessibilityButtonMatchesPaddedHostWindowOnly() passed after 0.001 seconds.
+✔ Test paddedWindowHeightIsAllowedButNotchOverlapIsRejected() passed after 0.001 seconds.
+✔ Suite MenuCollectionTests passed after 0.001 seconds.
+✔ Suite MenuWindowResolverTests passed after 0.001 seconds.
+✔ Test run with 14 tests in 2 suites passed after 0.001 seconds.

@@ -1,0 +1,77 @@
+[0/1] Planning build
+Building for debugging...
+[0/8] Write sources
+[3/8] Write swift-version--1AB21518FC5DEDBE.txt
+[5/13] Compiling FlowmoriCore Models.swift
+[6/13] Compiling FlowmoriCore ProductMigration.swift
+[7/13] Compiling FlowmoriCore MenuWindowResolver.swift
+[8/13] Compiling FlowmoriCore HistoryStore.swift
+[9/13] Emitting module FlowmoriCore
+[10/27] Emitting module FlowmoriCoreTests
+[11/27] Compiling FlowmoriCoreTests MenuWindowResolverTests.swift
+[12/27] Compiling Flowmori PinController.swift
+[13/27] Compiling Flowmori ClipboardService.swift
+[14/27] Compiling Flowmori CollectionPanel.swift
+[15/28] Compiling Flowmori main.swift
+[16/28] Compiling Flowmori Settings.swift
+[17/28] Compiling Flowmori SettingsView.swift
+[18/28] Compiling Flowmori MenuIconService.swift
+[19/28] Emitting module Flowmori
+[20/28] Compiling Flowmori MenuAccessibilityCatalog.swift
+[21/28] Compiling Flowmori HistoryPanel.swift
+[22/28] Compiling Flowmori MenuBarBackend.swift
+[23/28] Compiling Flowmori AppController.swift
+[24/28] Compiling Flowmori CaptureService.swift
+[24/29] Write Objects.LinkFileList
+[25/29] Linking Flowmori
+[26/29] Applying Flowmori
+[28/30] Emitting module FlowmoriPlatformTests
+[28/30] Write Objects.LinkFileList
+[29/30] Linking FlowmoriPackageTests
+Build complete! (4.82s)
+◇ Test run started.
+↳ Testing Library Version: 1902
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite MenuNotchReturnTests started.
+◇ Suite MenuLayoutStabilityTests started.
+◇ Suite MenuCollectionTests started.
+◇ Suite MenuWindowResolverTests started.
+◇ Test enumerationOrderDoesNotRestartSettling() started.
+◇ Test insertionReservesBothWidthsOutsideTheCutout() started.
+◇ Test recordedAnimationMustSettleBeforePlacementIsChecked() started.
+◇ Test missingControlCannotGenerateMoves() started.
+◇ Test temporaryAbsenceIsDifferentFromConflictOrReplacement() started.
+◇ Test paddedWindowHeightIsAllowedButNotchOverlapIsRejected() started.
+◇ Test unrelatedWindowNumberNeverOverridesOwnershipOrGeometry() started.
+◇ Test accessibilityButtonMatchesPaddedHostWindowOnly() started.
+◇ Test absentOrAmbiguousWindowsDoNotProduceAGuessedTarget() started.
+◇ Test collectionKeepsSystemAndUnknownAndPreservesApplicationOrder() started.
+◇ Test ownershipScanRejectsAMoveAndReturnEvenWhenFinalCoordinatesMatch() started.
+◇ Test virtualAppKitWindowNumberDoesNotOverflowAndMatchesGeometry() started.
+◇ Test ownershipSnapshotAcceptsReorderedEnumerationButRejectsReplacement() started.
+◇ Test ownershipScanRejectsMovedWindowsInsteadOfUsingStaleCoordinates() started.
+◇ Test missingOrUnchangingLayoutStopsPlacement() started.
+◇ Test nativeReflowIsReconciledFromObservedNeighborPosition() started.
+◇ Test alreadyRestoredLayoutDoesNotSendAnotherMove() started.
+✔ Test temporaryAbsenceIsDifferentFromConflictOrReplacement() passed after 0.001 seconds.
+✔ Test unrelatedWindowNumberNeverOverridesOwnershipOrGeometry() passed after 0.001 seconds.
+✔ Test insertionReservesBothWidthsOutsideTheCutout() passed after 0.001 seconds.
+✔ Test ownershipScanRejectsAMoveAndReturnEvenWhenFinalCoordinatesMatch() passed after 0.001 seconds.
+✔ Test paddedWindowHeightIsAllowedButNotchOverlapIsRejected() passed after 0.001 seconds.
+✔ Test accessibilityButtonMatchesPaddedHostWindowOnly() passed after 0.001 seconds.
+✔ Test recordedAnimationMustSettleBeforePlacementIsChecked() passed after 0.001 seconds.
+✔ Test enumerationOrderDoesNotRestartSettling() passed after 0.001 seconds.
+✔ Test absentOrAmbiguousWindowsDoNotProduceAGuessedTarget() passed after 0.001 seconds.
+✔ Test missingControlCannotGenerateMoves() passed after 0.001 seconds.
+✔ Test virtualAppKitWindowNumberDoesNotOverflowAndMatchesGeometry() passed after 0.001 seconds.
+✔ Test collectionKeepsSystemAndUnknownAndPreservesApplicationOrder() passed after 0.001 seconds.
+✔ Test nativeReflowIsReconciledFromObservedNeighborPosition() passed after 0.001 seconds.
+✔ Test alreadyRestoredLayoutDoesNotSendAnotherMove() passed after 0.001 seconds.
+✔ Test missingOrUnchangingLayoutStopsPlacement() passed after 0.001 seconds.
+✔ Test ownershipSnapshotAcceptsReorderedEnumerationButRejectsReplacement() passed after 0.001 seconds.
+✔ Suite MenuNotchReturnTests passed after 0.001 seconds.
+✔ Test ownershipScanRejectsMovedWindowsInsteadOfUsingStaleCoordinates() passed after 0.001 seconds.
+✔ Suite MenuLayoutStabilityTests passed after 0.001 seconds.
+✔ Suite MenuCollectionTests passed after 0.001 seconds.
+✔ Suite MenuWindowResolverTests passed after 0.001 seconds.
+✔ Test run with 17 tests in 4 suites passed after 0.001 seconds.
