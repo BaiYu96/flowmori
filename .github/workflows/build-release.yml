@@ -7,6 +7,11 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      existing_tag:
+        description: "Existing tag to rebuild (empty = CI only)"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -19,6 +24,8 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.existing_tag || github.ref }}
 
       - name: Print build environment
         run: |
@@ -28,19 +35,26 @@ jobs:
           swift --version
 
       - name: Confirm release tag matches app version
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || inputs.existing_tag != ''
+        env:
+          RELEASE_TAG: ${{ inputs.existing_tag || github.ref_name }}
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
-            echo "Release tag must look like v0.1.47" >&2
+
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "Invalid release tag: $RELEASE_TAG" >&2
             exit 1
           }
+
           APP_VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
-          [[ "$GITHUB_REF_NAME" == "v$APP_VERSION" ]] || {
-            echo "Tag $GITHUB_REF_NAME does not match Info.plist version $APP_VERSION" >&2
+
+          [[ "$RELEASE_TAG" == "v$APP_VERSION" ]] || {
+            echo "Tag $RELEASE_TAG does not match Info.plist version $APP_VERSION" >&2
             exit 1
           }
+
+          echo "Release version verified: $RELEASE_TAG"
 
       - name: Run Swift tests
         run: bash scripts/swift-command.sh test
@@ -86,7 +100,7 @@ jobs:
 
   publish:
     name: Publish GitHub prerelease
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.existing_tag != '') }}
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -121,14 +135,24 @@ jobs:
       - name: Create GitHub prerelease
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.existing_tag || github.ref_name }}
         shell: bash
         run: |
           set -euo pipefail
-          gh release create "$GITHUB_REF_NAME" \
-            --repo "$GITHUB_REPOSITORY" \
-            dist/*.dmg dist/*.zip dist/SHA256SUMS.txt \
-            --verify-tag \
-            --title "Flowmori $GITHUB_REF_NAME (Preview)" \
-            --notes-file release-notes.md \
-            --prerelease \
+
+          args=(
+            --repo "$GITHUB_REPOSITORY"
+            --verify-tag
+            --title "Flowmori $RELEASE_TAG (Preview)"
+            --notes-file release-notes.md
+            --prerelease
             --latest=false
+          )
+
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            args+=(--draft)
+          fi
+
+          gh release create "$RELEASE_TAG" \
+            dist/*.dmg dist/*.zip dist/SHA256SUMS.txt \
+            "${args[@]}"
