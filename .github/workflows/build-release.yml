@@ -1,0 +1,130 @@
+name: Flowmori macOS CI and Preview Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Test and package (macOS 26 arm64)
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Print build environment
+        run: |
+          sw_vers
+          uname -m
+          xcodebuild -version
+          swift --version
+
+      - name: Confirm release tag matches app version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "Release tag must look like v0.1.47" >&2
+            exit 1
+          }
+          APP_VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
+          [[ "$GITHUB_REF_NAME" == "v$APP_VERSION" ]] || {
+            echo "Tag $GITHUB_REF_NAME does not match Info.plist version $APP_VERSION" >&2
+            exit 1
+          }
+
+      - name: Run Swift tests
+        run: bash scripts/swift-command.sh test
+
+      - name: Build ad-hoc-signed app
+        run: bash scripts/build-app.sh release
+
+      - name: Validate app identity and architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP=dist/Flowmori.app
+          codesign --verify --strict "$APP"
+          plutil -lint "$APP/Contents/Info.plist"
+          ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist")
+          [[ "$ID" == 'ai.flowmori.Flowmori' ]] || { echo "Wrong bundle ID: $ID" >&2; exit 1; }
+          ARCHS=$(lipo -archs "$APP/Contents/MacOS/Flowmori")
+          [[ "$ARCHS" == 'arm64' ]] || { echo "Expected arm64, got $ARCHS" >&2; exit 1; }
+          echo "Bundle ID: $ID; architecture: $ARCHS"
+
+      - name: Create ZIP, source archive and DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/package.sh
+          VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
+          hdiutil create -volname Flowmori \
+            -srcfolder dist/Flowmori.app \
+            -ov -format UDZO "dist/Flowmori-${VERSION}-arm64.dmg"
+          hdiutil verify "dist/Flowmori-${VERSION}-arm64.dmg"
+          shasum -a 256 dist/*.dmg dist/*.zip > dist/SHA256SUMS.txt
+
+      - name: Upload downloadable build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: flowmori-macos-arm64
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish GitHub prerelease
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: flowmori-macos-arm64
+          path: dist
+
+      - name: Verify SHA-256 checksums
+        run: sha256sum -c dist/SHA256SUMS.txt
+
+      - name: Prepare release notes
+        shell: bash
+        run: |
+          cat > release-notes.md <<'EOF'
+          ## Flowmori early preview (Apple Silicon)
+
+          This is an experimental, ad-hoc-signed build. It is **not Developer ID signed or Apple notarized**. macOS Gatekeeper may block the first launch. Only open the app if you trust its source; follow Apple's Privacy & Security instructions when necessary. Do not disable SIP or Gatekeeper system-wide.
+
+          - Minimum macOS version: 26.0
+          - CPU architecture: Apple Silicon (arm64)
+          - Menu bar icon organization: currently gated to macOS 26.6.2 (25G83); other system builds may not enable this feature.
+          - macOS may ask for Screen Recording and Accessibility permissions, and permissions might need to be re-granted after ad-hoc-signed updates.
+          - No runtime UI or system-permission behavior has been verified merely by this automated build. Refer to docs/TESTING.md and test on a real Mac.
+
+          See `SHA256SUMS.txt` for release-asset checksums.
+          EOF
+
+      - name: Create GitHub prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            dist/*.dmg dist/*.zip dist/SHA256SUMS.txt \
+            --verify-tag --title "Flowmori $GITHUB_REF_NAME (Preview)" \
+            --notes-file release-notes.md --prerelease --latest=false
