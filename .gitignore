@@ -4,3 +4,9 @@ dist/
 .DS_Store
 *.xcuserstate
 .validation/
+
+# Local development notes and generated logs
+.local/
+*.log
+__pycache__/
+*.pyc

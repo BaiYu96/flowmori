@@ -9,16 +9,31 @@ TASK_ARCH="$(lipo -archs dist/Flowmori.app/Contents/MacOS/Flowmori)"
 TASK_ARCH="${TASK_ARCH// /-}"
 ditto -c -k --keepParent dist/Flowmori.app "dist/Flowmori-$TASK_VERSION-$TASK_ARCH.zip"
 python3 - "$TASK_VERSION" <<'PY'
-import pathlib,sys,zipfile
+import pathlib,subprocess,sys,zipfile
 root=pathlib.Path.cwd()
+# Package the working-tree contents of tracked public source files only.
+# Local notes, ignored files and untracked scratch files cannot enter a release.
+tracked=subprocess.check_output(['git','ls-files','--cached','-z'],cwd=root).decode().split('\0')
+root_files={'Package.swift','README.md','LICENSE','.gitignore'}
+source_dirs={'Resources','Sources','Tests','scripts','docs','img'}
+files=[]
+for name in sorted(set(tracked)-{''}):
+    relative=pathlib.PurePosixPath(name)
+    if name not in root_files and relative.parts[0] not in source_dirs:
+        continue
+    if relative.suffix in {'.log','.pyc'} or any(part in {'.DS_Store','__pycache__'} for part in relative.parts):
+        continue
+    file=root/name
+    if file.is_symlink() or not file.is_file():
+        raise SystemExit(f'Expected regular source file: {name}')
+    files.append((file,'Flowmori/'+name))
+for required in root_files | {'docs/TESTING.md','img/flowmori-app-icon.png','img/flowmori-menu-icon.png'}:
+    if required not in tracked:
+        raise SystemExit(f'Stage required source file before packaging: {required}')
 with zipfile.ZipFile(root/'dist'/f'Flowmori-{sys.argv[1]}-source.zip','w',zipfile.ZIP_DEFLATED) as archive:
-    for name in ['Package.swift','README.md','LICENSE','.gitignore','Resources','Sources','Tests','scripts','docs']:
-        path=root/name
-        files=sorted(path.rglob('*')) if path.is_dir() else [path]
-        for file in files:
-            if file.is_file() and '.DS_Store' not in file.parts and '__pycache__' not in file.parts:
-                info=zipfile.ZipInfo.from_file(file,'Flowmori/'+str(file.relative_to(root)))
-                info.compress_type=zipfile.ZIP_DEFLATED
-                archive.writestr(info,file.read_bytes())
+    for file,name in files:
+        info=zipfile.ZipInfo.from_file(file,name)
+        info.compress_type=zipfile.ZIP_DEFLATED
+        archive.writestr(info,file.read_bytes())
 print('Packaged app and source archives in dist/.')
 PY
