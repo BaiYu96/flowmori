@@ -125,6 +125,10 @@ jobs:
         run: |
           set -euo pipefail
           gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
             dist/*.dmg dist/*.zip dist/SHA256SUMS.txt \
-            --verify-tag --title "Flowmori $GITHUB_REF_NAME (Preview)" \
-            --notes-file release-notes.md --prerelease --latest=false
+            --verify-tag \
+            --title "Flowmori $GITHUB_REF_NAME (Preview)" \
+            --notes-file release-notes.md \
+            --prerelease \
+            --latest=false
