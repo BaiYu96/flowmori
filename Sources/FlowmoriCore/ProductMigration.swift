@@ -30,6 +30,25 @@ public enum ProductMigration {
         return destination
     }
 
+    public static func migratePreviousPreferences(previous: [String: Any], into defaults: UserDefaults) {
+        guard !previous.isEmpty else { return }
+        let keys = [
+            "historyLimit", "exclusions", "menuEnabled",
+            "hotkey.history", "hotkey.capture", "hotkey.pin", "hotkey.collection",
+            "NSStatusItem Preferred Position Flowmori.Main",
+            "NSStatusItem Preferred Position Flowmori.CollectionDivider",
+            "NSStatusItem VisibleCC Flowmori.Main",
+            "NSStatusItem VisibleCC Flowmori.CollectionDivider"
+        ]
+        for key in keys where defaults.object(forKey: key) == nil {
+            if let value = previous[key] { defaults.set(value, forKey: key) }
+        }
+        if defaults.object(forKey: loginIntentKey) == nil,
+           let requested = previous["loginRequested"] as? Bool {
+            defaults.set(requested, forKey: loginIntentKey)
+        }
+    }
+
     /// Import only product preferences, never arbitrary global/system defaults.
     /// Keep existing Flowmori values and mark the import only after it completes.
     public static func preferences(legacy: [String: Any], into defaults: UserDefaults,

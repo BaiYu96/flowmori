@@ -4,7 +4,7 @@ import ApplicationServices
 // Local UI acceptance harness. Never included in Flowmori.app or enabled on login.
 // Its only UI targets are Flowmori and this dedicated fixture application.
 let fixtureID = "app.flowmori.MenuBarFixture2"
-let allowedBundles = ["app.flowmori.Flowmori", fixtureID]
+let allowedBundles = ["ai.flowmori.Flowmori", fixtureID]
 func emit(_ value: Any) {
     if let data = try? JSONSerialization.data(withJSONObject:value,options:[.prettyPrinted,.sortedKeys,.fragmentsAllowed]) {
         print(String(decoding:data,as:UTF8.self))
@@ -166,19 +166,24 @@ final class Fixture: NSObject, NSApplicationDelegate, NSMenuDelegate, NSPopoverD
         record("icon\(index+1)-\(right ? "right" : "left")")
         if index == 1 && !right {
             let view = NSViewController(); view.view = NSView(frame:NSRect(x:0,y:0,width:260,height:150))
-            let label = NSTextField(labelWithString:"Flowmori 专用测试弹窗"); label.frame = NSRect(x:20,y:94,width:220,height:30); view.view.addSubview(label)
-            let close = NSButton(title:"关闭测试弹窗",target:self,action:#selector(closePopover)); close.frame = NSRect(x:45,y:30,width:170,height:34); view.view.addSubview(close)
-            popover.contentViewController = view; popover.behavior = .transient; popover.delegate = self
+            let label = NSTextField(labelWithString:"Flowmori 专用测试弹窗"); label.frame = NSRect(x:20,y:112,width:220,height:30); view.view.addSubview(label)
+            let close = NSButton(title:"关闭测试弹窗",target:self,action:#selector(closePopover)); close.frame = NSRect(x:45,y:68,width:170,height:30); view.view.addSubview(close)
+            let quit = NSButton(title:"退出测试程序",target:self,action:#selector(quitFixture)); quit.frame = NSRect(x:45,y:28,width:170,height:30); view.view.addSubview(quit)
+            popover.contentViewController = view
+            popover.behavior = CommandLine.arguments.contains("--persistent-popover") ? .applicationDefined : .transient
+            popover.delegate = self
             popover.show(relativeTo:sender.bounds,of:sender,preferredEdge:.minY)
         } else {
             let menu = NSMenu(title:right ? "QA-Right" : "QA-Normal"); menu.delegate = self
             let item = NSMenuItem(title:right ? "右键测试操作" : "普通菜单测试操作",action:#selector(testAction),keyEquivalent:""); item.target = self
             menu.addItem(item); menu.addItem(.separator()); menu.addItem(withTitle:"仅供 Flowmori 验收",action:nil,keyEquivalent:"")
+            let quit = NSMenuItem(title:"退出测试程序",action:#selector(self.quitFixture),keyEquivalent:""); quit.target = self; menu.addItem(quit)
             menu.popUp(positioning:nil,at:NSPoint(x:0,y:sender.bounds.minY),in:sender)
         }
     }
     @objc func closePopover() { popover.performClose(nil) }
     @objc func testAction() { record("menu-action") }
+    @objc func quitFixture() { record("quit-from-menu"); NSApp.terminate(nil) }
     func menuWillOpen(_ menu:NSMenu) { record("\(menu.title)-opened") }
     func menuDidClose(_ menu:NSMenu) { record("\(menu.title)-closed") }
     func popoverDidShow(_ notification:Notification) { record("popover-opened") }
@@ -205,7 +210,7 @@ if args.first == "--fixture" {
             emit(["accessibility":AXIsProcessTrusted(),"screenCapture":CGPreflightScreenCaptureAccess(),"front":NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""])
         } else {
             guard AXIsProcessTrusted() else { throw NSError(domain:"QA",code:2,userInfo:[NSLocalizedDescriptionKey:"The script host needs Accessibility permission"]) }
-            let inputs = ["activate","menuDrag","menuMoveBefore","menuClick","dragNative","press","pressDescription","probeDirect","set","key","click","drag"]
+            let inputs = ["activate","menuDrag","menuMoveBefore","menuClick","dragNative","press","pressDescription","probeDirect","set","key","typeText","doubleClick","click","drag"]
             if inputs.contains(operation), NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.loginwindow" {
                 throw NSError(domain:"QA",code:9,userInfo:[NSLocalizedDescriptionKey:"The desktop is locked; no test input was sent"])
             }
@@ -440,11 +445,43 @@ if args.first == "--fixture" {
                     } catch { emit(["error":error.localizedDescription]); exit(1) }
                 }
                 RunLoop.main.run()
+            case "typeText":
+                guard allowedBundles.contains(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "") else { throw NSError(domain:"QA",code:5,userInfo:[NSLocalizedDescriptionKey:"Focus is outside allowed test apps"]) }
+                let text = request["text"] as? String ?? ""
+                guard !text.isEmpty else { throw NSError(domain:"QA",code:7,userInfo:[NSLocalizedDescriptionKey:"Missing text"]) }
+                let source = CGEventSource(stateID:.hidSystemState)
+                let units = Array(text.utf16)
+                var index = 0
+                while index < units.count {
+                    let chunk = Array(units[index..<min(units.count, index+16)])
+                    let down = CGEvent(keyboardEventSource:source,virtualKey:0,keyDown:true)!
+                    chunk.withUnsafeBufferPointer { buffer in
+                        if let base = buffer.baseAddress { down.keyboardSetUnicodeString(stringLength: buffer.count,unicodeString: base) }
+                    }
+                    down.post(tap:.cghidEventTap); usleep(30_000)
+                    let up = CGEvent(keyboardEventSource:source,virtualKey:0,keyDown:false)!
+                    up.post(tap:.cghidEventTap); usleep(30_000)
+                    index += chunk.count
+                }
+                emit(["ok":true,"characters":units.count])
             case "key":
                 guard allowedBundles.contains(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "") else { throw NSError(domain:"QA",code:5,userInfo:[NSLocalizedDescriptionKey:"Focus is outside allowed test apps"]) }
                 let key = CGKeyCode(request["keyCode"] as? Int ?? 53), flags = CGEventFlags(rawValue:request["flags"] as? UInt64 ?? 0)
                 let source = CGEventSource(stateID:.hidSystemState)
                 for down in [true,false] { let event = CGEvent(keyboardEventSource:source,virtualKey:key,keyDown:down)!; event.flags = flags; event.post(tap:.cghidEventTap); usleep(70_000) }
+                emit(["ok":true])
+            case "doubleClick":
+                guard allowedBundles.contains(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "") else { throw NSError(domain:"QA",code:5,userInfo:[NSLocalizedDescriptionKey:"Focus is outside allowed test apps"]) }
+                guard let point = request["point"] as? [Double], point.count == 2 else { throw NSError(domain:"QA",code:6) }
+                let location = CGPoint(x:point[0],y:point[1])
+                let source = CGEventSource(stateID:.hidSystemState)
+                func send(_ type:CGEventType,_ state:Int64) {
+                    let event = CGEvent(mouseEventSource:source,mouseType:type,mouseCursorPosition:location,mouseButton:.left)!
+                    event.setIntegerValueField(.mouseEventClickState,value:state); event.post(tap:.cghidEventTap)
+                }
+                send(.mouseMoved,1); usleep(80_000)
+                send(.leftMouseDown,1); usleep(30_000); send(.leftMouseUp,1); usleep(90_000)
+                send(.leftMouseDown,2); usleep(30_000); send(.leftMouseUp,2)
                 emit(["ok":true])
             case "click", "drag":
                 guard let point = request["point"] as? [Double], point.count == 2 else { throw NSError(domain:"QA",code:6) }

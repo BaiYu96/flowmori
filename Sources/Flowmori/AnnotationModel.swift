@@ -206,6 +206,25 @@ enum AnnotationRenderer {
     }
 }
 
+enum AnnotationExporter {
+    static func png(image: CGImage, annotations: [Annotation]) -> Data? {
+        let width = image.width, height = image.height
+        guard width > 0, height > 0,
+              let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
+                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+              let context = NSGraphicsContext(bitmapImageRep: rep) else { return nil }
+        rep.size = NSSize(width: CGFloat(width), height: CGFloat(height))
+        let export = AnnotationExportView(frame: NSRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)),
+                                          image: image, annotations: annotations)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        export.cacheDisplay(in: export.bounds, to: rep)
+        NSGraphicsContext.restoreGraphicsState()
+        return rep.representation(using: .png, properties: [:])
+    }
+}
+
 final class AnnotationExportView: NSView {
     let image: CGImage
     let annotations: [Annotation]

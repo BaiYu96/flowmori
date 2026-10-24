@@ -30,8 +30,8 @@ enum MenuBarError: LocalizedError {
         case .permission: return "请先授予辅助功能权限，才能操作其他应用的菜单栏图标。"
         case .disappeared: return "这个图标已退出或发生变化，请重试。"
         case .busy: return "请先完成当前菜单栏操作。"
-        case .operationCancelled: return "应用或桌面状态发生变化，已停止当前操作。请重试。"
-        case .operationTimedOut: return "菜单操作超过两分钟，请关闭原菜单后重试。"
+        case .operationCancelled: return "应用或桌面状态发生变化，已停止当前操作并展开菜单栏。请重试。"
+        case .operationTimedOut: return "菜单操作超过两分钟，已展开菜单栏；请关闭原菜单后重试。"
         case .moveFailed: return "菜单栏操作未能完成，请展开菜单栏后重试。"
         case .directUnavailable(let reason): return reason
         case .directActivationFailed(let reason): return reason
@@ -104,7 +104,7 @@ final class MenuBarSystem {
             let rawTitle = value[kCGWindowName as String] as? String ?? ""
             guard rawTitle != "Menubar" else { return nil }
             let hosted = app.bundleIdentifier == "com.apple.controlcenter"
-            let flowmori = NSRunningApplication.runningApplications(withBundleIdentifier:"app.flowmori.Flowmori").first
+            let flowmori = NSRunningApplication.runningApplications(withBundleIdentifier:ProductIdentity.bundleID).first
             let ownByTitle = (flowmori != nil && ["Flowmori.Main","Flowmori.CollectionDivider"].contains(rawTitle))
             let knownSystem = ["Clock","BentoBox-0","WiFi","Battery","Spotlight"].contains(rawTitle)
             let fingerprint = "\(pid)|\(app.launchDate?.timeIntervalSince1970 ?? 0)|\(rawTitle)"
@@ -122,7 +122,7 @@ final class MenuBarSystem {
             }
             let ownerPID = own ? (flowmori?.processIdentifier ?? ProcessInfo.processInfo.processIdentifier) : (identity?.owner.pid ?? (hosted && !knownSystem ? 0 : pid))
             let name = own ? "Flowmori" : (identity?.owner.name ?? (ownerPID == 0 ? "待识别图标" : app.localizedName ?? "应用 \(pid)"))
-            let bundle = own ? "app.flowmori.Flowmori" : (identity?.owner.bundleID ?? (ownerPID == 0 ? "" : app.bundleIdentifier ?? ""))
+            let bundle = own ? ProductIdentity.bundleID : (identity?.owner.bundleID ?? (ownerPID == 0 ? "" : app.bundleIdentifier ?? ""))
             return MenuBarEntry(id:id,pid:pid,ownerPID:ownerPID,bundleID:bundle,name:name,
                                 title:identity?.label ?? rawTitle,frame:rect,
                                 supportedActions:identity?.actions ?? [])
@@ -130,13 +130,18 @@ final class MenuBarSystem {
     }
     func claimOwnStatusWindow(_ id:CGWindowID) { ownWindows.insert(id) }
     @MainActor func invalidateOwnershipScan() { ownershipRevision &+= 1 }
-    @MainActor @discardableResult func refreshOwnership() async -> Bool {
+    @MainActor @discardableResult func refreshOwnership(priorityPID: pid_t? = nil) async -> Bool {
         guard AXIsProcessTrusted(), let initial = try? entries() else { return false }
         func candidates(_ entries: [MenuBarEntry]) -> [MenuWindowResolver.Candidate] {
             entries.map { .init(id:$0.id,pid:$0.pid,frame:$0.frame) }
         }
         let snapshot = MenuOwnershipSnapshot(revision:ownershipRevision,windows:candidates(initial))
-        let apps = NSWorkspace.shared.runningApplications.filter { !$0.isTerminated && $0.activationPolicy != .prohibited }.map {
+        let running = NSWorkspace.shared.runningApplications.filter { !$0.isTerminated && $0.activationPolicy != .prohibited }
+        let hosts: Set<String> = ["com.apple.controlcenter", "com.apple.systemuiserver", "com.apple.WindowManager"]
+        let selected = priorityPID.map { pid in
+            running.filter { $0.processIdentifier == pid || hosts.contains($0.bundleIdentifier ?? "") }
+        } ?? running
+        let apps = selected.map {
             MenuBarOwner(pid:$0.processIdentifier,bundleID:$0.bundleIdentifier ?? "",name:$0.localizedName ?? "应用")
         }
         let catalog = await Task.detached(priority:.utility) { MenuAccessibilityCatalog.scan(apps) }.value
@@ -299,7 +304,6 @@ final class MenuBarSystem {
     @Published private(set) var expanded = true
     @Published private(set) var operating = false
     let system = MenuBarSystem()
-    let iconService = MenuIconService()
     private let settings: Settings
     private let divider: NSStatusItem
     private let control: NSStatusItem
@@ -317,14 +321,37 @@ final class MenuBarSystem {
     private var allowCollapse = false
     private var suspended = false
     private var collectedIDs = Set<CGWindowID>()
+    private var collectedFingerprints: [CGWindowID:String] = [:]
     private var wantsCollection = false
     private var needsCollection = false
     private var ownershipTask: Task<Void,Never>?
+    private var priorityLaunchPID: pid_t?
+    private var holdMessage = false
     private var nextOwnershipRefresh = Date.distantPast
     private let layout = MenuLayoutDeferral()
     var onChanged: (() -> Void)?
     var onMessage: ((String) -> Void)?
     var closePanel: (() -> Void)?
+    private var inlinePresenter: NativeInlineMenuPresenter?
+    private var inlineRoot: [InlineMenuNode] = []
+    private var inlineEntry: MenuBarEntry?
+    private var menuAnchor = NSPoint.zero
+    private var preparingInline = false
+    private var directFailureUntil = Date.distantPast
+    private var inlineCache: [CGWindowID: CachedInlineMenu] = [:]
+    private var unavailableCache: [CGWindowID: UnavailableInlineMenu] = [:]
+    private struct CachedInlineMenu {
+        let nodes: [InlineMenuNode]
+        let createdAt: Date
+        let ownerPID: pid_t
+        let launchDate: Date?
+    }
+    private struct UnavailableInlineMenu {
+        let message: String
+        let until: Date
+        let ownerPID: pid_t
+        let launchDate: Date?
+    }
     init(settings: Settings, control: NSStatusItem, dataDirectory: URL) {
         self.settings = settings; self.control = control
         recoveryFile = dataDirectory.appendingPathComponent("menu-recovery.json")
@@ -344,15 +371,29 @@ final class MenuBarSystem {
         }
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification,
                      NSWorkspace.didWakeNotification, NSWorkspace.willSleepNotification, NSWorkspace.activeSpaceDidChangeNotification] {
-            observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName:name,object:nil,queue:.main) { [weak self] _ in
+            observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName:name,object:nil,queue:.main) { [weak self] notification in
                 MainActor.assumeIsolated {
                     guard let self else { return }
                     self.lastLifecycleEvent = name.rawValue
+                    if name == NSWorkspace.didLaunchApplicationNotification,
+                       let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
+                        let pid = app.processIdentifier
+                        self.priorityLaunchPID = pid
+                        Task { [weak self] in
+                            try? await Task.sleep(for:.milliseconds(250))
+                            guard let self else { return }
+                            self.priorityLaunchPID = pid
+                            self.nextOwnershipRefresh = .distantPast
+                            self.refresh()
+                        }
+                    }
                     self.system.invalidateOwnershipScan()
-                    // Display/Space and app changes can replace status windows. Re-snapshot
-                    // membership only in the expanded layout, never infer it off-screen.
-                    self.operation?.cancel(); self.showAll()
-                    self.needsCollection = self.wantsCollection
+                    self.clearInlineCaches()
+                    // App launches, app exits, sleep/wake, and Space switches are
+                    // routine while the user works. Re-scan ownership in place;
+                    // never expand the menu bar merely because one of them fired.
+                    // refresh() only expands if the actual layout is unusable.
+                    self.operation?.cancel()
                     self.nextOwnershipRefresh = .distantPast
                     self.refresh()
                 }
@@ -362,6 +403,7 @@ final class MenuBarSystem {
             MainActor.assumeIsolated {
                 guard let self else { return }; self.operation?.cancel(); self.showAll(); self.refresh()
                 self.system.invalidateOwnershipScan()
+                self.clearInlineCaches()
                 self.lastLifecycleEvent = "screenParametersChanged"
                 self.message = "显示器已变化，收纳已展开。确认图标位置后可再次收起。"
             }
@@ -409,12 +451,19 @@ final class MenuBarSystem {
             try? FileManager.default.removeItem(at:recoveryFile)
             message = "正在准备自动收纳…"
             wantsCollection = true; needsCollection = true
-        } else { wantsCollection = false; needsCollection = false; message = "收纳已暂停，所有图标恢复系统布局。" }
+        } else {
+            wantsCollection = false; needsCollection = false
+            collectedIDs.removeAll(); collectedFingerprints.removeAll()
+            message = "收纳已暂停，所有图标恢复系统布局。"
+        }
         refresh()
     }
     func refresh() {
-        guard !operating, !layout.isSettling else { return }
-        guard system.sessionAllowsInput else { showAll(); return }
+        let pinned = holdMessage ? message : nil
+        defer { if let pinned { message = pinned } }
+        guard inlinePresenter == nil, !operating, !layout.isSettling else { return }
+        // A locked screen must not expand the menu bar behind the lock screen.
+        guard system.sessionAllowsInput else { return }
         allowCollapse = false
         guard settings.menuEnabled, !suspended else { if !items.isEmpty { items = [] }; return }
         guard system.available else { fail(MenuBarError.unavailable); return }
@@ -423,9 +472,11 @@ final class MenuBarSystem {
         }
         if ownershipTask == nil, Date() >= nextOwnershipRefresh {
             nextOwnershipRefresh = Date().addingTimeInterval(10)
+            let priorityPID = priorityLaunchPID
+            priorityLaunchPID = nil
             ownershipTask = Task { [weak self] in
                 guard let self else { return }
-                let accepted = await self.system.refreshOwnership()
+                let accepted = await self.system.refreshOwnership(priorityPID:priorityPID)
                 guard !Task.isCancelled else { return }
                 self.ownershipTask = nil
                 // A stale scan must not erase verified owners. Retry on the
@@ -441,8 +492,21 @@ final class MenuBarSystem {
                 showAll(); message = "暂时无法确认菜单栏图标位置，已展开。等待系统布局后自动重试。"; return
             }
             if wantsCollection {
+                pruneCollected(all)
                 let newItems = all.filter { $0.ownerPID != ownPIDForCollection && $0.ownershipResolved && !$0.protected && !collectedIDs.contains($0.id) && abs($0.frame.midY-anchor.midY) < 3 }
-                if !newItems.isEmpty { needsCollection = true }
+                if !newItems.isEmpty && needsCollection == false {
+                    // Once the user has opted into collection, new status items
+                    // should join it without a manual expand/re-collect cycle.
+                    // Only do this while collapsed; an explicitly expanded bar
+                    // is left alone.
+                    if !expanded, operation == nil {
+                        showPending(newItems)
+                        message = "发现 \(newItems.count) 个新图标，正在收纳…"
+                        collectAll()
+                        return
+                    }
+                    message = "发现 \(newItems.count) 个新图标，点击「收纳全部」以收纳。"
+                }
             }
             if needsCollection && ownershipTask == nil {
                 collectAll(); return
@@ -461,11 +525,12 @@ final class MenuBarSystem {
             }
             if expanded { collectedIDs = Set(hidden.map(\.id)) }
             guard hidden.allSatisfy(\.ownershipResolved) else {
-                if items != hidden { items = hidden }; showAll(); message = "正在识别图标所属应用，完成前保持展开。"; return
+                if items != hidden { items = hidden }
+                message = "正在识别图标所属应用…"
+                return
             }
             if hidden.contains(where:\.protected) { fail(MenuBarError.protectedItem); return }
             if items != hidden { items = hidden }
-            iconService.refresh(hidden)
             allowCollapse = true
             if expanded && hidden.isEmpty { message = "暂无可管理图标，点击「收纳全部」重新识别。" }
             else { message = expanded ? "已展开 · \(hidden.count) 个图标可收纳" : "已收纳 \(hidden.count) 个图标" }
@@ -473,6 +538,36 @@ final class MenuBarSystem {
         } catch { fail(error) }
     }
     private var ownPIDForCollection: pid_t { ProcessInfo.processInfo.processIdentifier }
+    /// New status items are visible before the collection pass has finished
+    /// moving them. Show them in the panel immediately so the user does not
+    /// have to wait for a full expand/re-collect cycle to see the icon.
+    private func showPending(_ newItems:[MenuBarEntry]) {
+        var updated = items
+        let existing = Set(updated.map(\.id))
+        updated.append(contentsOf:newItems.filter { !existing.contains($0.id) })
+        guard updated != items else { return }
+        updated.sort { $0.frame.minX < $1.frame.minX }
+        items = updated
+        inlineDebugLog("pending new ids=\(newItems.map { Int($0.id) }) panel=\(updated.count)")
+        onChanged?()
+    }
+    private func collectionFingerprint(_ entry:MenuBarEntry) -> String {
+        let launch = NSRunningApplication(processIdentifier:entry.ownerPID)?.launchDate?.timeIntervalSince1970 ?? 0
+        return "\(entry.ownerPID)|\(entry.bundleID)|\(launch)"
+    }
+    private func pruneCollected(_ all:[MenuBarEntry]) {
+        let byID = Dictionary(uniqueKeysWithValues: all.map { ($0.id,$0) })
+        for id in collectedIDs {
+            guard let entry = byID[id] else {
+                collectedIDs.remove(id); collectedFingerprints.removeValue(forKey:id); continue
+            }
+            // Window IDs can be recycled after an app exits. A different owner
+            // on the same ID is a new item, not a collected one.
+            if entry.ownerPID > 0, collectedFingerprints[id] != collectionFingerprint(entry) {
+                collectedIDs.remove(id); collectedFingerprints.removeValue(forKey:id)
+            }
+        }
+    }
     @objc func toggleExpanded() {
         if expanded { collectAll() }
         else { wantsCollection = false; needsCollection = false; showAll() }
@@ -504,6 +599,7 @@ final class MenuBarSystem {
     /// never an automatic fallback for a failed in-panel activation.
     func expandMenuBar() {
         guard !operating else { onMessage?(MenuBarError.busy.localizedDescription); return }
+        holdMessage = false
         closePanel?()
         showAll()
         message = "已展开菜单栏，请直接在菜单栏操作图标。"
@@ -512,6 +608,7 @@ final class MenuBarSystem {
     /// User-requested/global organization is separate from temporary menu restore.
     func collectAll() {
         guard !operating, system.available, system.sessionAllowsInput else { return }
+        holdMessage = false
         suspended = false
         if !settings.menuEnabled { enable(true); return }
         guard AXIsProcessTrusted() else { message = MenuBarError.permission.localizedDescription; return }
@@ -556,6 +653,7 @@ final class MenuBarSystem {
                       all.filter({ plan.retained.contains($0.id) }).allSatisfy({ $0.frame.minX >= bar.maxX-3 }),
                       targets.allSatisfy({ target in all.contains { $0.id == target.id && $0.frame.maxX <= bar.minX+3 } }) else { throw MenuBarError.moveFailed }
                 collectedIDs = Set(targets.map(\.id))
+                collectedFingerprints = Dictionary(uniqueKeysWithValues: targets.map { ($0.id,self.collectionFingerprint($0)) })
                 operating = false
                 collapse()
                 operating = true
@@ -586,89 +684,337 @@ final class MenuBarSystem {
     }
     private func fail(_ error: Error) {
         showAll(); suspended = true; allowCollapse = false; wantsCollection = false; needsCollection = false
+        collectedIDs.removeAll(); collectedFingerprints.removeAll()
         message = error.localizedDescription; onMessage?(message)
     }
     func activate(_ entry: MenuBarEntry, right: Bool) {
+        inlineDebugLog("activate id=\(entry.id) name=\(entry.name) right=\(right) operating=\(operating) presenter=\(inlinePresenter != nil) resolved=\(entry.ownershipResolved)")
+        guard inlinePresenter == nil else { onMessage?("请先关闭已打开的菜单。"); return }
         guard !operating, transaction.begin(entry.id) else { onMessage?(MenuBarError.busy.localizedDescription); return }
-        let name = entry.title.isEmpty ? entry.name : entry.title
+        holdMessage = false
+        directFailureUntil = .distantPast
+        menuAnchor = NSEvent.mouseLocation
+        let name = entry.name.isEmpty ? entry.title : entry.name
         guard !entry.protected else { transaction.fail(); onMessage?(MenuBarError.protectedItem.localizedDescription); return }
         guard entry.ownershipResolved else { transaction.fail(); onMessage?("正在识别「\(name)」所属应用，请稍后重试。"); return }
-        if right && !entry.rightDirectAvailable {
-            transaction.fail()
-            onMessage?("「\(name)」暂不支持在收纳盒内直接右键操作。请点击「展开菜单栏」后手动操作。")
-            return
-        }
-        if !right && !entry.leftDirectAvailable {
-            transaction.fail()
-            onMessage?("「\(name)」暂不支持在收纳盒内直接操作。请点击「展开菜单栏」后手动操作。")
-            return
-        }
         operating = true
         lastOperationOutcome = "running"
-        closePanel?()
         operation = Task { [weak self] in
             guard let self else { return }
             do {
                 try await self.performDirect(entry,right:right)
-                self.lastOperationOutcome = "completed"
+                self.lastOperationOutcome = self.inlinePresenter == nil ? "completed" : "panelMenu"
             } catch is CancellationError {
-                self.lastOperationOutcome = "cancelled"; self.transaction.fail(); self.failDirect(MenuBarError.operationCancelled)
+                self.finishIfSourceTerminated(entry:entry,name:name)
+            } catch MenuBarError.operationCancelled {
+                self.finishIfSourceTerminated(entry:entry,name:name)
             } catch MenuBarError.operationTimedOut {
-                self.lastOperationOutcome = "timedOut"; self.transaction.fail(); self.failDirect(MenuBarError.operationTimedOut)
+                self.lastOperationOutcome = "timedOut"; self.transaction.fail(); self.fail(MenuBarError.operationTimedOut)
             } catch {
                 self.lastOperationOutcome = "failed"; self.transaction.fail(); self.failDirect(error)
             }
-            self.transaction.finish(); self.operating = false; self.operation = nil; self.refresh()
+            self.transaction.finish()
+            self.operating = self.inlinePresenter != nil
+            self.operation = nil
+            if self.inlinePresenter == nil { self.refresh() }
         }
     }
-    /// Direct activation uses the original app's live AX status item. It never
-    /// moves the icon: a successful action is proven by a newly visible owner
-    /// window (menu/popover), not by the AX return code alone.
+    /// Quitting the source app from its own menu is a normal completion, not a
+    /// failed layout operation. Expanding here surprises the user and can leave
+    /// the rest of the bar exposed for an action they initiated.
+    private func finishIfSourceTerminated(entry:MenuBarEntry,name:String) {
+        guard sourceTerminated(entry.ownerPID) else {
+            lastOperationOutcome = "cancelled"
+            transaction.fail()
+            fail(MenuBarError.operationCancelled)
+            return
+        }
+        lastOperationOutcome = "sourceTerminated"
+        transaction.finish()
+        inlinePresenter?.cancel()
+        inlinePresenter = nil; inlineRoot = []; inlineEntry = nil
+        holdMessage = false
+        operationStage = "source-terminated"
+        message = "「\(name)」已退出。"
+        operating = false
+        closePanel?()
+    }
+    /// Open the live AX menu, snapshot its items, and dismiss the off-screen
+    /// native menu before presenting the same items inside the collection
+    /// panel. Status icons never move and the menu bar never expands.
     private func performDirect(_ entry: MenuBarEntry,right:Bool) async throws {
-        operationStage = right ? "direct-right" : "direct-left"
+        operationStage = right ? "panel-right" : "panel-left"
         guard AXIsProcessTrusted(), system.available else { throw MenuBarError.permission }
         guard system.sessionAllowsInput else { throw MenuBarError.operationCancelled }
         guard let current = try system.entries().first(where: {
             $0.id == entry.id && $0.ownerPID == entry.ownerPID && $0.bundleID == entry.bundleID
         }) else { throw MenuBarError.disappeared }
-        let name = current.title.isEmpty ? current.name : current.title
+        let name = current.name.isEmpty ? current.title : current.name
+        if let unavailable = cachedUnavailable(for:current) {
+            throw MenuBarError.directUnavailable(unavailable)
+        }
+        if let cached = cachedInlineMenu(for:current) {
+            returnDetail = "panel=\(right ? "right" : "left") cache=hit nodes=\(cached.count)"
+            operationStage = "panel-menu"
+            presentInlineMenu(cached,entry:current)
+            return
+        }
         let owner = MenuBarOwner(pid:current.ownerPID,bundleID:current.bundleID,name:current.name)
-        let before = directWindows(current)
-        let activation = MenuAccessibilityCatalog.activate(owner,frame:current.frame,label:current.title,right:right)
-        returnDetail = "direct=\(right ? "right" : "left") action=\(activation.action) ax=\(activation.error.rawValue) supported=\(activation.supported)"
-        guard activation.performed else {
-            throw MenuBarError.directUnavailable("「\(name)」暂不支持在收纳盒内直接\(right ? "右键操作" : "打开")。请点击「展开菜单栏」后手动操作。")
+        let frame = current.frame
+        let label = current.title
+        let before = popoverWindows(current)
+        preparingInline = true
+        defer { preparingInline = false }
+        holdMessage = true
+        message = "正在读取「\(name)」的菜单…"
+        let request = InlinePreparationRequest()
+        defer { request.cancel() }
+        DispatchQueue.global(qos:.userInitiated).async {
+            request.complete(MenuAccessibilityCatalog.prepare(owner:owner,frame:frame,label:label,right:right,request:request))
         }
-        operationStage = "direct-await-ui"
-        var opened = Set<UInt32>()
-        for _ in 0..<20 {
+        let deadline = ProcessInfo.processInfo.systemUptime + 2
+        var candidateWindows = Set<UInt32>()
+        var candidateSince = ProcessInfo.processInfo.systemUptime
+        var detectedPopover = Set<UInt32>()
+        var observedWindows = Set<UInt32>()
+        while request.read() == nil, ProcessInfo.processInfo.systemUptime < deadline {
             try Task.checkCancellation()
             guard system.sessionAllowsInput else { throw MenuBarError.operationCancelled }
-            let now = directWindows(current)
-            opened = now.subtracting(before)
-            if !opened.isEmpty { break }
-            try await Task.sleep(for:.milliseconds(100))
+            let windows = popoverWindows(current).subtracting(before)
+            observedWindows.formUnion(windows)
+            if windows != candidateWindows {
+                candidateWindows = windows
+                candidateSince = ProcessInfo.processInfo.systemUptime
+            }
+            if !windows.isEmpty, ProcessInfo.processInfo.systemUptime - candidateSince >= 0.3 {
+                detectedPopover = windows
+                closePanel?()
+                break
+            }
+            try await Task.sleep(for:.milliseconds(50))
         }
-        guard !opened.isEmpty else {
-            throw MenuBarError.directActivationFailed("「\(name)」没有显示可访问的菜单或弹窗。此图标暂不支持收纳盒内直接操作，请展开菜单栏后手动操作。")
+        let preparation = detectedPopover.isEmpty ? request.read() : nil
+        request.cancel()
+        let resolvedPreparation = preparation ?? InlineMenuPreparation(nodes:[],action:"",supported:[],error:.cannotComplete,failure:.noMenu)
+        try Task.checkCancellation()
+        guard system.sessionAllowsInput else { throw MenuBarError.operationCancelled }
+        let fallback = right && resolvedPreparation.action != "AXShowMenu"
+        returnDetail = "panel=\(right ? "right" : "left") action=\(resolvedPreparation.action) ax=\(resolvedPreparation.error.rawValue) supported=\(resolvedPreparation.supported)"
+        if fallback { returnDetail += " rightFallback=AXPress" }
+        switch resolvedPreparation.failure {
+        case .some(.cancelled):
+            throw MenuBarError.operationCancelled
+        case .some(.unavailable):
+            let text = "「\(name)」不支持在收纳盒内打开菜单。请点击「展开菜单栏」后手动操作。"
+            cacheUnavailable(text,for:current)
+            throw MenuBarError.directUnavailable(text)
+        case .some(.emptyMenu):
+            let text = "「\(name)」的菜单没有可在收纳盒内显示的项目。"
+            cacheUnavailable(text,for:current)
+            throw MenuBarError.directActivationFailed(text)
+        case .some(.noMenu):
+            var opened = detectedPopover.union(popoverWindows(current).subtracting(before))
+            if !opened.isEmpty {
+                // A source menu window can outlive AXCancel for a fraction of a
+                // second. Only treat a persistent new window as a real popover.
+                try await Task.sleep(for:.milliseconds(300))
+                guard system.sessionAllowsInput else { throw MenuBarError.operationCancelled }
+                opened.formIntersection(popoverWindows(current))
+            }
+            guard !opened.isEmpty else {
+                // A quick user dismissal may happen while AX is still reading.
+                // An observed popover still completes the interaction.
+                if !observedWindows.isEmpty {
+                    closePanel?()
+                    operationStage = "direct-completed"
+                    return
+                }
+                let text = "「\(name)」没有显示可访问的菜单或弹窗。"
+                cacheUnavailable(text,for:current)
+                throw MenuBarError.directActivationFailed(text)
+            }
+            closePanel?()
+            operationStage = "direct-menu-open"
+            let deadline = Date().addingTimeInterval(120)
+            while !opened.isEmpty && !opened.isDisjoint(with:popoverWindows(current)) {
+                try Task.checkCancellation()
+                guard AXIsProcessTrusted() else { throw MenuBarError.permission }
+                guard system.sessionAllowsInput else { throw MenuBarError.operationCancelled }
+                guard Date() < deadline else { throw MenuBarError.operationTimedOut }
+                if sourceTerminated(current.ownerPID) {
+                    throw MenuBarError.operationCancelled
+                }
+                try await Task.sleep(for:.milliseconds(250))
+            }
+            if sourceTerminated(current.ownerPID) {
+                throw MenuBarError.operationCancelled
+            }
+            operationStage = "direct-completed"
+            return
+        case .none:
+            break
         }
-        operationStage = "direct-menu-open"
-        let deadline = Date().addingTimeInterval(120)
-        while !opened.isEmpty && !opened.isDisjoint(with:directWindows(current)) {
-            try Task.checkCancellation()
-            guard AXIsProcessTrusted() else { throw MenuBarError.permission }
-            guard system.sessionAllowsInput else { throw MenuBarError.operationCancelled }
-            guard Date() < deadline else { throw MenuBarError.operationTimedOut }
-            if let app = NSRunningApplication(processIdentifier:current.ownerPID), app.isTerminated { throw MenuBarError.disappeared }
-            try await Task.sleep(for:.milliseconds(250))
-        }
-        operationStage = "direct-completed"
+        cacheInlineMenu(resolvedPreparation.nodes,for:current)
+        operationStage = "panel-menu"
+        presentInlineMenu(resolvedPreparation.nodes,entry:current)
     }
-    private func directWindows(_ entry:MenuBarEntry) -> Set<UInt32> {
-        system.visibleWindows(pid:entry.ownerPID).union(system.visibleWindows(pid:entry.pid))
+    private func presentInlineMenu(_ nodes:[InlineMenuNode],entry:MenuBarEntry) {
+        inlineRoot = nodes; inlineEntry = entry
+        lastOperationOutcome = "panelMenu"; message = "菜单已打开。"
+        let presenter = NativeInlineMenuPresenter()
+        inlinePresenter = presenter
+        presenter.present(nodes:nodes,at:menuAnchor,onSelect:{ [weak self] path in
+            self?.performInline(path)
+        },onCancel:{ [weak self] in
+            self?.inlineMenuClosed()
+        })
+    }
+    private func launchDate(for pid:pid_t) -> Date? {
+        NSRunningApplication(processIdentifier:pid)?.launchDate
+    }
+    private func cachedInlineMenu(for entry:MenuBarEntry) -> [InlineMenuNode]? {
+        guard let cached = inlineCache[entry.id] else { return nil }
+        guard cached.ownerPID == entry.ownerPID, cached.launchDate == launchDate(for:entry.ownerPID),
+              Date().timeIntervalSince(cached.createdAt) < 10 else {
+            inlineCache.removeValue(forKey:entry.id)
+            return nil
+        }
+        return cached.nodes
+    }
+    private func cacheInlineMenu(_ nodes:[InlineMenuNode],for entry:MenuBarEntry) {
+        guard !nodes.isEmpty else { return }
+        inlineCache[entry.id] = CachedInlineMenu(nodes:nodes,createdAt:Date(),
+            ownerPID:entry.ownerPID,launchDate:launchDate(for:entry.ownerPID))
+    }
+    private func cachedUnavailable(for entry:MenuBarEntry) -> String? {
+        guard let cached = unavailableCache[entry.id] else { return nil }
+        guard cached.ownerPID == entry.ownerPID, cached.launchDate == launchDate(for:entry.ownerPID),
+              cached.until > Date() else {
+            unavailableCache.removeValue(forKey:entry.id)
+            return nil
+        }
+        return cached.message
+    }
+    private func cacheUnavailable(_ message:String,for entry:MenuBarEntry) {
+        unavailableCache[entry.id] = UnavailableInlineMenu(message:message,
+            until:Date().addingTimeInterval(5),ownerPID:entry.ownerPID,launchDate:launchDate(for:entry.ownerPID))
+    }
+    private func clearInlineCache(for id:CGWindowID) {
+        inlineCache.removeValue(forKey:id)
+        unavailableCache.removeValue(forKey:id)
+    }
+    private func clearInlineCaches() {
+        inlineCache.removeAll()
+        unavailableCache.removeAll()
+    }
+    private func performInline(_ path:[Int]) {
+        inlineDebugLog("performInline called path=\(path) entry=\(inlineEntry != nil) root=\(inlineRoot.count)")
+        guard let entry = inlineEntry, let expected = InlineMenuSelection.levels(nodes:inlineRoot,path:path) else { return }
+        clearInlineCache(for:entry.id)
+        var nodes = inlineRoot
+        var title = entry.name.isEmpty ? entry.title : entry.name
+        for (depth,index) in path.enumerated() {
+            guard index >= 0, index < nodes.count else { return }
+            let node = nodes[index]
+            guard node.enabled, !node.isSeparator else { return }
+            title = node.title.isEmpty ? title : node.title
+            if depth == path.count - 1, node.children.isEmpty {
+                let owner = MenuBarOwner(pid:entry.ownerPID,bundleID:entry.bundleID,name:entry.name)
+                inlineDebugLog("performInline path=\(path) owner=\(owner.name) frame=\(entry.frame)")
+                operating = true
+                operationStage = "panel-action"
+                Task.detached { [weak self] in
+                    try? await Task.sleep(for:.milliseconds(200))
+                    let error = MenuAccessibilityCatalog.press(owner:owner,frame:entry.frame,label:entry.title,path:path,expected:expected)
+                    inlineDebugLog("source press path=\(path) error=\(error.rawValue)")
+                    await self?.finishInlineAction(error:error,title:title)
+                }
+                return
+            }
+            nodes = node.children
+        }
+    }
+    private func inlineMenuClosed() {
+        guard inlinePresenter != nil else { return }
+        inlinePresenter = nil; inlineRoot = []; inlineEntry = nil
+        holdMessage = false
+        message = "已关闭菜单。"; operating = false; operationStage = "panel-menu"
+        transaction.finish()
+        refresh()
+    }
+    private func finishInlineAction(error:AXError,title:String) {
+        if let id = inlineEntry?.id { clearInlineCache(for:id) }
+        guard error == .success else {
+            inlinePresenter = nil
+            inlineRoot = []; inlineEntry = nil
+            holdMessage = true
+            operationStage = "panel-unavailable"
+            message = "菜单项「\(title)」执行失败（\(error.rawValue)）。"
+            operating = false
+            onMessage?(message)
+            refresh()
+            return
+        }
+        inlinePresenter = nil; inlineRoot = []; inlineEntry = nil
+        message = "已执行「\(title)」。"; lastOperationOutcome = "panelMenuAction"
+        operationStage = "panel-completed"
+        operating = false
+        holdMessage = false
+        closePanel?()
+        refresh()
+    }
+    func dismissInlineMenu() {
+        guard inlinePresenter != nil || inlineEntry != nil else { return }
+        let presenter = inlinePresenter
+        inlinePresenter = nil; inlineRoot = []; inlineEntry = nil
+        presenter?.cancel()
+        holdMessage = false
+        message = "已关闭菜单。"; operating = false; operationStage = "panel-menu"
+        transaction.finish()
+        refresh()
+    }
+    func panelDidClose() {
+        inlineDebugLog("panelDidClose presenter=\(inlinePresenter != nil) entry=\(inlineEntry != nil) operating=\(operating)")
+        holdMessage = false
+        directFailureUntil = .distantPast
+        unavailableCache.removeAll()
+        if inlinePresenter != nil || inlineEntry != nil { dismissInlineMenu() }
+    }
+    var isMenuOpen: Bool { inlinePresenter != nil || inlineEntry != nil || preparingInline || Date() < directFailureUntil }
+    private func sourceTerminated(_ pid:pid_t) -> Bool {
+        guard let app = NSRunningApplication(processIdentifier:pid) else { return true }
+        return app.isTerminated
+    }
+    private func popoverWindows(_ entry:MenuBarEntry) -> Set<UInt32> {
+        var result = Set<UInt32>()
+        for info in system.windowInfo(onScreenOnly:true) {
+            guard let id = info[kCGWindowNumber as String] as? UInt32,
+                  let pid = info[kCGWindowOwnerPID as String] as? pid_t, pid == entry.ownerPID,
+                  (info[kCGWindowLayer as String] as? Int ?? 0) > 0,
+                  let rect = windowBounds(info), isOnScreen(rect) else { continue }
+            result.insert(id)
+        }
+        return result
+    }
+    private func windowBounds(_ info:[String:Any]) -> CGRect? {
+        guard let value = info[kCGWindowBounds as String] as? [String:Any] else { return nil }
+        return CGRect(dictionaryRepresentation:value as CFDictionary)
+    }
+    private func isOnScreen(_ rect:CGRect) -> Bool {
+        guard let primary = NSScreen.screens.first else { return false }
+        let top = primary.frame.maxY
+        return NSScreen.screens.contains {
+            CGRect(x:$0.frame.minX,y:top-$0.frame.maxY,width:$0.frame.width,height:$0.frame.height).intersects(rect)
+        }
     }
     private func failDirect(_ error:Error) {
-        message = error.localizedDescription
+        // A failed direct activation is not a menu mode: explain it and keep
+        // the panel usable. Pin the text so the 3-second refresh cannot replace
+        // it with the generic "已收纳 N 个图标" status.
+        holdMessage = true
+        directFailureUntil = Date().addingTimeInterval(3)
+        operationStage = "panel-unavailable"
+        message = "\(error.localizedDescription) 可点击「展开菜单栏」后手动操作。"
         onMessage?(message)
     }
     private func isReachable(_ rect: CGRect) -> Bool {
@@ -680,8 +1026,8 @@ final class MenuBarSystem {
         return screen.frame.contains(appRect)
     }
     func stop() {
-        timer?.invalidate(); operation?.cancel(); ownershipTask?.cancel(); iconService.stop(); showAll()
-        layout.cancel()
+        timer?.invalidate(); operation?.cancel(); ownershipTask?.cancel(); showAll()
+        layout.cancel(); clearInlineCaches()
         NSStatusBar.system.removeStatusItem(divider)
         for observer in observers {
             NotificationCenter.default.removeObserver(observer)

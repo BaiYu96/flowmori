@@ -12,8 +12,10 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
     }
     var currentColor: NSColor = .systemRed
     var currentLineWidth: CGFloat = 4
+    var imageFillsBounds = false
     var onStateChange: (() -> Void)?
     var onCancel: (() -> Void)?
+    var onConfirm: (() -> Void)?
     private(set) var undoStack: [[Annotation]] = []
     private(set) var redoStack: [[Annotation]] = []
     private var selectedID: UUID?
@@ -40,6 +42,7 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func resetCursorRects() {
         let cursor: NSCursor = tool == .select ? .arrow : (tool == .text ? .iBeam : .crosshair)
         addCursorRect(bounds, cursor: cursor)
@@ -52,6 +55,7 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
 
     var imageRect: CGRect {
         guard image.width > 0, image.height > 0 else { return .zero }
+        if imageFillsBounds { return bounds }
         let available = bounds.insetBy(dx: 24, dy: 24)
         let scale = min(1, available.width / CGFloat(image.width), available.height / CGFloat(image.height))
         let size = CGSize(width: CGFloat(image.width) * scale, height: CGFloat(image.height) * scale)
@@ -68,8 +72,9 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
         NSImage(cgImage: image, size: CGSize(width: CGFloat(image.width), height: CGFloat(image.height)))
             .draw(in: target, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true,
                   hints: [.interpolation: NSImageInterpolation.high])
-        NSColor.white.withAlphaComponent(0.16).setStroke()
-        let border = NSBezierPath(rect: target); border.lineWidth = 1; border.stroke()
+        if imageFillsBounds { NSColor.controlAccentColor.withAlphaComponent(0.85).setStroke() }
+        else { NSColor.white.withAlphaComponent(0.16).setStroke() }
+        let border = NSBezierPath(rect: target); border.lineWidth = imageFillsBounds ? 2 : 1; border.stroke()
         for annotation in annotations {
             AnnotationRenderer.draw(annotation, imageRect: target, scale: displayScale)
         }
@@ -271,7 +276,8 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
             if event.modifierFlags.contains(.shift) { redo() } else { undo() }
             return
         }
-        if event.keyCode == 36, hasSelection { return }
+        if event.keyCode == 36 { onConfirm?(); return }
+        if isCommand, event.charactersIgnoringModifiers?.lowercased() == "c" { onConfirm?(); return }
         super.keyDown(with: event)
     }
     override func cancelOperation(_ sender: Any?) {

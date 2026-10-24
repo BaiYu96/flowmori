@@ -17,7 +17,7 @@ if CommandLine.arguments.contains("--diagnose") {
     func applicationDidFinishLaunching(_ notification:Notification) {
         if let bundleID = Bundle.main.bundleIdentifier,
            NSRunningApplication.runningApplications(withBundleIdentifier:bundleID).contains(where: { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }) {
-            DistributedNotificationCenter.default().postNotificationName(NSNotification.Name("app.flowmori.showSettings"),object:nil,userInfo:nil,deliverImmediately:true)
+            DistributedNotificationCenter.default().postNotificationName(NSNotification.Name(ProductIdentity.bundleID + ".showSettings"),object:nil,userInfo:nil,deliverImmediately:true)
             NSApp.terminate(nil); return
         }
         var diagnostics: URL?
@@ -25,6 +25,9 @@ if CommandLine.arguments.contains("--diagnose") {
         let support = FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0]
         var migrationError: Error?
         do {
+            ProductMigration.migratePreviousPreferences(
+                previous: UserDefaults.standard.persistentDomain(forName: ProductIdentity.previousBundleID) ?? [:],
+                into: .standard)
             let legacyRunning = !NSRunningApplication.runningApplications(withBundleIdentifier:ProductMigration.legacyBundleID).isEmpty
             let hadLegacyData = FileManager.default.fileExists(atPath:support.appendingPathComponent(ProductMigration.legacyDirectoryName).path)
             let directory = try ProductMigration.dataDirectory(in:support,legacyRunning:legacyRunning)

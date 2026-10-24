@@ -13,7 +13,7 @@ struct SettingsView: View {
         HStack(spacing:0) {
             VStack(alignment:.leading,spacing:6) {
                 HStack(spacing:8) {
-                    Image(systemName:"square.stack.3d.up.fill").font(.title2).foregroundStyle(.tint)
+                    brandIcon(size: 32)
                     Text("Flowmori").font(.title3.bold())
                 }.padding(.vertical,24)
                 ForEach(pages,id:\.0) { item in
@@ -23,7 +23,7 @@ struct SettingsView: View {
                     }.buttonStyle(.plain)
                 }
                 Spacer()
-                Text("本地运行 · v0.1.0").font(.caption).foregroundStyle(.secondary).padding(.bottom,16)
+                Text("本地运行 · v\(shortVersion)").font(.caption).foregroundStyle(.secondary).padding(.bottom,16)
             }.padding(.horizontal,16).frame(width:150).background(.ultraThinMaterial)
             Divider()
             ScrollView {
@@ -102,7 +102,7 @@ struct SettingsView: View {
             }
             Text(menu.message).font(.callout).foregroundStyle(.secondary)
             Divider()
-            Text("收纳面板位于刘海下方。点击条目时，Flowmori 临时移出真实图标并打开它的菜单，菜单关闭后收回。")
+            Text("收纳面板位于刘海下方。点击条目时，Flowmori 读取该图标的原菜单并在收纳盒内显示；执行菜单项不会移动或展开菜单栏图标。")
             Text("兼容范围：macOS 26.6.2（25G83）。时钟、控制中心等系统状态项应留在常驻区。其他系统构建会暂停收纳，等待重新验证。").font(.caption).foregroundStyle(.secondary)
             Button("辅助功能设置") { settings.requestAccessibility() }
         }
@@ -128,10 +128,21 @@ struct SettingsView: View {
             Button(granted ? "打开系统设置" : "前往授权",action:action)
         }
     }
+    private func brandIcon(size: CGFloat) -> some View {
+        Image(nsImage: NSImage(named: "AppIcon") ?? NSApplication.shared.applicationIconImage)
+            .resizable().scaledToFit().frame(width: size, height: size)
+            .accessibilityLabel("Flowmori 应用图标")
+    }
+    private var shortVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.47"
+    }
+    private var platformMajorVersion: Int {
+        ProcessInfo.processInfo.operatingSystemVersion.majorVersion
+    }
     private var about: some View {
         VStack(alignment:.leading,spacing:18) {
-            Label("Flowmori",systemImage:"square.stack.3d.up.fill").font(.largeTitle.bold())
-            Text("版本 0.1.0 · Apple Silicon · macOS 26").foregroundStyle(.secondary)
+            HStack(spacing: 14) { brandIcon(size: 64); Text("Flowmori").font(.largeTitle.bold()) }
+            Text("版本 \(shortVersion) · Apple Silicon · macOS \(platformMajorVersion)").foregroundStyle(.secondary)
             Text("截图贴图、剪贴板历史与菜单栏收纳。\n无账号、无云同步、无遥测，所有历史存储在本机。").lineSpacing(6)
             Text("自主实现 · MIT License").font(.headline)
             Button("打开数据目录") { NSWorkspace.shared.open(app.dataDirectory) }

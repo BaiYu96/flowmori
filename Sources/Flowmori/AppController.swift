@@ -8,7 +8,6 @@ import OSLog
     let hotkeys = HotkeyManager()
     let pins = PinController()
     let capture = CaptureService()
-    let annotationEditor = AnnotationEditorController()
     let dataDirectory: URL
     let statusItem: NSStatusItem
     var clipboard: ClipboardService?
@@ -23,7 +22,7 @@ import OSLog
     private var diagnosticsURL: URL?
     private var systemObservers: [NSObjectProtocol] = []
     private let launchTime = Date()
-    private let logger = Logger(subsystem:"app.flowmori.Flowmori",category:"Lifecycle")
+    private let logger = Logger(subsystem:ProductIdentity.bundleID,category:"Lifecycle")
     @Published var startupError: String?
     @Published var hotkeyErrors: [AppAction:String] = [:]
     init(diagnosticsURL:URL? = nil, migrationError:Error? = nil) {
@@ -32,7 +31,14 @@ import OSLog
         statusItem = NSStatusBar.system.statusItem(withLength:NSStatusItem.squareLength)
         super.init()
         statusItem.autosaveName = "Flowmori.Main"
-        statusItem.button?.image = NSImage(systemSymbolName:"square.stack.3d.up",accessibilityDescription:"Flowmori")
+        if let url = Bundle.main.url(forResource:"FlowmoriMenuIcon",withExtension:"png"),
+           let image = NSImage(contentsOf:url) {
+            image.size = NSSize(width:20,height:20)
+            image.isTemplate = true
+            statusItem.button?.image = image
+        } else {
+            statusItem.button?.image = NSImage(systemSymbolName:"square.stack.3d.up",accessibilityDescription:"Flowmori")
+        }
         statusItem.button?.toolTip = "Flowmori · 左键收纳 · 右键工具菜单"
         statusItem.button?.target = self; statusItem.button?.action = #selector(statusClicked)
         statusItem.button?.sendAction(on:[.leftMouseUp,.rightMouseUp])
@@ -52,16 +58,12 @@ import OSLog
         collectionPanel = CollectionPanelController(manager:menuManager,settings:settings,statusItem:statusItem)
         collectionPanel.onSettings = { [weak self] in self?.showSettings() }
         capture.beforeCapture = { [weak self] in self?.historyPanel?.close(restore:false); self?.collectionPanel.close() }
-        annotationEditor.onCopy = { [weak self] png in
+        capture.onScreenshot = { [weak self] png in
             guard let self else { return }
             if let clipboard = self.clipboard { clipboard.acceptScreenshot(png) }
             else { NSPasteboard.general.clearContents(); NSPasteboard.general.setData(png,forType:.png); self.toast("截图已复制") }
         }
-        annotationEditor.onPin = { [weak self] image in self?.pins.pin(image) }
-        annotationEditor.onMessage = { [weak self] message in self?.toast(message) }
-        capture.onImage = { [weak self] image, restore in
-            self?.annotationEditor.present(image, restoreApplication:restore)
-        }
+        capture.onPin = { [weak self] image in self?.pins.pin(image) }
         capture.onMessage = { [weak self] message in self?.toast(message) }
         pins.onCopy = { [weak self] data in
             if let clipboard = self?.clipboard { _ = clipboard.write(ClipPayload(kind:.image,imagePNG:data)); clipboard.enqueue(ClipPayload(kind:.image,imagePNG:data)) }
@@ -91,7 +93,7 @@ import OSLog
         }
         systemObservers.append(NotificationCenter.default.addObserver(forName:NSApplication.didChangeScreenParametersNotification,object:nil,queue:.main) { [weak self] _ in MainActor.assumeIsolated { self?.capture.cancel(); self?.pins.constrainToScreens() } })
         systemObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName:NSWorkspace.willSleepNotification,object:nil,queue:.main) { [weak self] _ in MainActor.assumeIsolated { self?.capture.cancel() } })
-        DistributedNotificationCenter.default().addObserver(self,selector:#selector(showSettings),name:NSNotification.Name("app.flowmori.showSettings"),object:nil)
+        DistributedNotificationCenter.default().addObserver(self,selector:#selector(showSettings),name:NSNotification.Name(ProductIdentity.bundleID + ".showSettings"),object:nil)
         logger.info("Flowmori started")
     }
     func perform(_ action:AppAction) {
@@ -100,7 +102,7 @@ import OSLog
             collectionPanel.close()
             if let historyPanel { historyPanel.toggle() } else { toast(startupError ?? "历史暂不可用") }
         case .capture:
-            if annotationEditor.isPresenting { annotationEditor.focus(); toast("请先完成或取消当前截图标注。") }
+            if capture.isActive { capture.cancel() }
             else { capture.begin() }
         case .pin:
             if let image = clipboard?.currentImage() { pins.pin(image) }
@@ -183,7 +185,7 @@ import OSLog
         catch { logger.error("Could not write diagnostic heartbeat") }
     }
     func stop() {
-        capture.cancel(); annotationEditor.close(); clipboard?.stop(); menuManager.stop(); pins.closeAll(); hotkeys.unregisterAll()
+        capture.cancel(); clipboard?.stop(); menuManager.stop(); pins.closeAll(); hotkeys.unregisterAll()
         collectionPanel.close(); historyPanel?.close(restore:false)
         refreshTimer?.invalidate(); diagnosticTimer?.invalidate(); toastTask?.cancel()
         for observer in systemObservers { NotificationCenter.default.removeObserver(observer); NSWorkspace.shared.notificationCenter.removeObserver(observer) }

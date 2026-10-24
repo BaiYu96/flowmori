@@ -84,11 +84,53 @@ import Testing
         #expect(colored > 20)
     }
 
+    @Test func exportPreservesTransparentAndSemitransparentPixels() throws {
+        let context = try #require(CGContext(data:nil,width:80,height:60,bitsPerComponent:8,
+            bytesPerRow:0,space:CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.clear(CGRect(x:0,y:0,width:80,height:60))
+        context.setFillColor(CGColor(red:1,green:0,blue:0,alpha:0.5))
+        context.fill(CGRect(x:20,y:20,width:40,height:20))
+        let source = try #require(context.makeImage())
+        let png = try #require(AnnotationExporter.png(image:source,annotations:[]))
+        let rep = try #require(NSBitmapImageRep(data:png))
+        #expect(rep.pixelsWide == 80 && rep.pixelsHigh == 60)
+        #expect(try #require(rep.colorAt(x:5,y:5)).alphaComponent < 0.01)
+        #expect(abs(try #require(rep.colorAt(x:40,y:30)).alphaComponent - 0.5) < 0.02)
+    }
+
     @Test func textAnnotationComputesMultilineBounds() {
         let annotation = Annotation.text("第一行\n第二行", at: CGPoint(x: 10, y: 10), width: 160,
                                          fontSize: 20, color: .systemRed)
         #expect(annotation.bounds.width == 160)
         #expect(annotation.bounds.height > 20)
         #expect(annotation.bounds.minX == 10)
+    }
+
+    @Test func inlineCanvasFillsItsBoundsForInPlaceEditing() throws {
+        let width = 120, height = 80
+        let context = try #require(CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+                                             bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        let image = try #require(context.makeImage())
+        let view = AnnotationCanvasView(frame: NSRect(x: 0, y: 0, width: width, height: height), image: image)
+        view.imageFillsBounds = true
+        #expect(view.imageRect == view.bounds)
+        #expect(view.displayScale == 1)
+    }
+
+    @Test func exporterRendersAnnotatedPNGAtCropPixelSize() throws {
+        let width = 120, height = 80
+        let context = try #require(CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+                                             bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(NSColor.white.cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        let image = try #require(context.makeImage())
+        let annotation = Annotation.rectangle(from: CGPoint(x: 10, y: 10), to: CGPoint(x: 80, y: 50),
+                                              color: .black, lineWidth: 4)
+        let png = try #require(AnnotationExporter.png(image: image, annotations: [annotation]))
+        let decoded = try #require(NSImage(data: png))
+        #expect(decoded.size == NSSize(width: width, height: height))
     }
 }

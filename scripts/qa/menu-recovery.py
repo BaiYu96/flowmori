@@ -38,21 +38,31 @@ def main():
             raise RuntimeError('Product permissions are not granted')
         if 'lastOperationOutcome' not in initial['menuLayout']:
             raise RuntimeError('This build cannot distinguish cancellation from timeout')
-        qa.open_panel()
+        qa.show_panel()
         collapse = next((n for n in qa.panel_nodes(qa.APP) if n.get('AXDescription') == '收纳全部'), None)
         if collapse:
-            qa.press(qa.APP, collapse)
+            qa.press_text(qa.APP, '收纳全部', 'AXButton')
             deadline = time.monotonic() + 30
             while time.monotonic() < deadline:
-                current = qa.collapsed_fixture()
+                current = qa.fixture_items()
                 if len(current) == 3 and all(n['frame'][0] < 0 for n in current):
                     break
                 time.sleep(.3)
-        before = qa.collapsed_fixture()
+        before = qa.fixture_items()
         if len(before) != 3 or not all(n['frame'][0] < 0 for n in before):
             raise RuntimeError('Prepare all three fixture icons in the collapsed collection first')
         proof['before'] = before
-        qa.press(qa.APP, qa.control(qa.APP, 'Flowmori QA, Flowmori QA Popover'))
+        qa.show_panel()
+        buttons = qa.fixture_buttons()
+        deadline = time.monotonic() + 12
+        while len(buttons) != 3 and time.monotonic() < deadline:
+            time.sleep(.25)
+            qa.show_panel()
+            buttons = qa.fixture_buttons()
+        if len(buttons) != 3:
+            raise RuntimeError(f'Expected 3 fixture buttons, got {len(buttons)}')
+        x, y, width, height = buttons[1]['frame']
+        qa.request({'op': 'click', 'point': [x + width / 2, y + height / 2]})
         qa.control(qa.FIXTURE, '关闭测试弹窗')
         opened = True
         started = time.time()
@@ -68,7 +78,7 @@ def main():
             result = subprocess.run(['swift', '-e', code], capture_output=True, text=True, check=True)
             if result.stdout.strip() != 'true':
                 raise RuntimeError('Fixture termination was not accepted')
-        expected = 'cancelled' if args.case == 'exit' else 'timedOut'
+        expected = 'sourceTerminated' if args.case == 'exit' else 'timedOut'
         deadline = time.monotonic() + (30 if args.case == 'exit' else 150)
         while time.monotonic() < deadline:
             value = heartbeat()
@@ -79,12 +89,17 @@ def main():
                 proof['elapsedSeconds'] = time.time() - started
                 if outcome != expected:
                     raise RuntimeError(f'Expected {expected}, observed {outcome}; recovery is not established')
-                if not value['menuExpanded']:
-                    raise RuntimeError('Recovery did not expand the menu bar')
+                if value['menuExpanded'] != (args.case == 'timeout'):
+                    raise RuntimeError('Unexpected menu expansion state after recovery')
                 if args.case == 'timeout' and proof['elapsedSeconds'] < 115:
                     raise RuntimeError('Timeout occurred earlier than the two-minute limit')
                 message = value['menuLayout']['message']
-                if '已停止' not in message or '展开' not in message:
+                # Successful source exit returns to the normal collection summary.
+                # The stable outcome/stage proves completion; only failures pin a message.
+                required = [] if args.case == 'exit' else ['展开', '两分钟']
+                if args.case == 'exit' and value['menuLayout']['operationStage'] != 'source-terminated':
+                    raise RuntimeError('Source exit did not reach its completion stage')
+                if any(word not in message for word in required):
                     raise RuntimeError('Missing Chinese recovery explanation')
                 if args.case == 'exit':
                     scoped = qa.request({'op': 'menuProbe', 'bundle': qa.APP})['scoped']
@@ -103,7 +118,7 @@ def main():
         args.output.write_text(json.dumps(proof, indent=2, ensure_ascii=False))
         if opened and args.case == 'timeout':
             try:
-                qa.press(qa.FIXTURE, qa.control(qa.FIXTURE, '关闭测试弹窗', timeout=2))
+                qa.press_text(qa.FIXTURE, '关闭测试弹窗', 'AXButton', timeout=2)
             except Exception:
                 pass  # Locked desktop or a dismissed popover: do not force input.
         print(json.dumps(proof, ensure_ascii=False), flush=True)

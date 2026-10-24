@@ -76,6 +76,50 @@ struct ProductMigrationTests {
         }
     }
 
+    @Test func previousFlowmoriPreferencesFillOnlyMissingValues() throws {
+        let suite = "ai.flowmori.tests.previous.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(700, forKey: "historyLimit")
+        let shortcut = Data([9, 8, 7])
+        let previous: [String: Any] = [
+            "historyLimit": 300,
+            "hotkey.history": shortcut,
+            "menuEnabled": true,
+            "exclusions": "old.private",
+            "loginRequested": true,
+            "hasLaunched": true,
+            "NSStatusItem Preferred Position Flowmori.Main": 313,
+            "NSStatusItem VisibleCC Flowmori.CollectionDivider": true,
+            "unrelated": "skip"
+        ]
+        ProductMigration.migratePreviousPreferences(previous: previous, into: defaults)
+        #expect(defaults.integer(forKey: "historyLimit") == 700)
+        #expect(defaults.data(forKey: "hotkey.history") == shortcut)
+        #expect(defaults.bool(forKey: "menuEnabled"))
+        #expect(defaults.string(forKey: "exclusions") == "old.private")
+        #expect(defaults.object(forKey: ProductMigration.loginIntentKey) as? Bool == true)
+        #expect(!defaults.bool(forKey: "hasLaunched"))
+        #expect(defaults.integer(forKey: "NSStatusItem Preferred Position Flowmori.Main") == 313)
+        #expect(defaults.bool(forKey: "NSStatusItem VisibleCC Flowmori.CollectionDivider"))
+        #expect(defaults.object(forKey: "unrelated") == nil)
+    }
+
+    @Test func previousFlowmoriMigrationPreservesExplicitLoginIntentAndEmptyDomain() throws {
+        let suite = "ai.flowmori.tests.previous.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(false, forKey: ProductMigration.loginIntentKey)
+        ProductMigration.migratePreviousPreferences(previous: ["loginRequested": true], into: defaults)
+        #expect(defaults.object(forKey: ProductMigration.loginIntentKey) as? Bool == false)
+        let freshSuite = "ai.flowmori.tests.previous.\(UUID())"
+        let fresh = UserDefaults(suiteName: freshSuite)!
+        defer { fresh.removePersistentDomain(forName: freshSuite) }
+        ProductMigration.migratePreviousPreferences(previous: [:], into: fresh)
+        #expect(fresh.object(forKey: ProductMigration.loginIntentKey) == nil)
+        #expect(fresh.object(forKey: "historyLimit") == nil)
+    }
+
     @Test func freshInstallIsNotMistakenForMigration() throws {
         try withDirectory { root in
             let suite = "app.flowmori.tests.migration.\(UUID())"
