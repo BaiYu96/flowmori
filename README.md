@@ -23,7 +23,7 @@ bash scripts/build-app.sh
 open dist/Flowmori.app
 ```
 
-已验证构建可用 `bash scripts/package.sh` 生成应用 ZIP 与完整源码 ZIP；打包不会重签应用。源码包仅包含 Git 已跟踪的公开源码文件的当前内容；新增源码需先 `git add`，本机笔记和日志不会打入源码包。
+已验证构建可用 `bash scripts/package.sh` 生成安装 DMG、应用 ZIP 与完整源码 ZIP；打包不会重签应用。DMG 包含 Flowmori.app、Applications 快捷入口和中英文安装说明。打开 DMG 后，将 Flowmori.app 拖到 Applications，复制完成后从「应用程序」启动并推出磁盘映像；更新前先退出旧版。源码包仅包含 Git 已跟踪的公开源码文件的当前内容；新增源码需先 `git add`，本机笔记和日志不会打入源码包。
 
 安装到当前用户的应用目录并启动：
 

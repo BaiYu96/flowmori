@@ -8,6 +8,30 @@ codesign --verify --strict dist/Flowmori.app
 TASK_ARCH="$(lipo -archs dist/Flowmori.app/Contents/MacOS/Flowmori)"
 TASK_ARCH="${TASK_ARCH// /-}"
 ditto -c -k --keepParent dist/Flowmori.app "dist/Flowmori-$TASK_VERSION-$TASK_ARCH.zip"
+# Stage the volume root explicitly so the app and Applications appear together.
+# Do not point hdiutil at the app bundle itself or follow the Applications link.
+TASK_DMG_STAGE="$(mktemp -d "${TMPDIR:-/tmp}/flowmori-dmg.XXXXXX")"
+trap 'rm -rf "$TASK_DMG_STAGE"' EXIT
+ditto dist/Flowmori.app "$TASK_DMG_STAGE/Flowmori.app"
+ln -s /Applications "$TASK_DMG_STAGE/Applications"
+cat > "$TASK_DMG_STAGE/安装说明 - 拖动 Flowmori 到 Applications.txt" <<'INSTALL'
+安装 Flowmori
+
+将此窗口中的 Flowmori.app 拖到 Applications 文件夹，即可安装。
+复制完成后，请从「应用程序」打开 Flowmori，再推出此磁盘映像。
+
+更新时，请先退出正在运行的 Flowmori，再拖入并选择替换。
+
+Install Flowmori
+
+Drag Flowmori.app onto Applications in this window.
+When copying finishes, open Flowmori from Applications and eject this disk image.
+To update, quit Flowmori first, then drag it into Applications and choose Replace.
+INSTALL
+hdiutil create -volname "Flowmori - 拖入 Applications" \
+    -srcfolder "$TASK_DMG_STAGE" \
+    -ov -format UDZO "dist/Flowmori-$TASK_VERSION-$TASK_ARCH.dmg"
+hdiutil verify "dist/Flowmori-$TASK_VERSION-$TASK_ARCH.dmg"
 python3 - "$TASK_VERSION" <<'PY'
 import pathlib,subprocess,sys,zipfile
 root=pathlib.Path.cwd()
@@ -35,5 +59,5 @@ with zipfile.ZipFile(root/'dist'/f'Flowmori-{sys.argv[1]}-source.zip','w',zipfil
         info=zipfile.ZipInfo.from_file(file,name)
         info.compress_type=zipfile.ZIP_DEFLATED
         archive.writestr(info,file.read_bytes())
-print('Packaged app and source archives in dist/.')
+print('Packaged installation DMG, app ZIP and source ZIP in dist/.')
 PY

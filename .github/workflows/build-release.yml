@@ -80,11 +80,6 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/package.sh
-          VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
-          hdiutil create -volname Flowmori \
-            -srcfolder dist/Flowmori.app \
-            -ov -format UDZO "dist/Flowmori-${VERSION}-arm64.dmg"
-          hdiutil verify "dist/Flowmori-${VERSION}-arm64.dmg"
           shasum -a 256 dist/*.dmg dist/*.zip > dist/SHA256SUMS.txt
 
       - name: Upload downloadable build artifacts
