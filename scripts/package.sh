@@ -38,7 +38,7 @@ root=pathlib.Path.cwd()
 # Package the working-tree contents of tracked public source files only.
 # Local notes, ignored files and untracked scratch files cannot enter a release.
 tracked=subprocess.check_output(['git','ls-files','--cached','-z'],cwd=root).decode().split('\0')
-root_files={'Package.swift','README.md','LICENSE','.gitignore'}
+root_files={'Package.swift','README.md','README_CN.md','LICENSE','.gitignore'}
 source_dirs={'Resources','Sources','Tests','scripts','docs','img'}
 files=[]
 for name in sorted(set(tracked)-{''}):
