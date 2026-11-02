@@ -1,11 +1,12 @@
 import AppKit
 
 enum AnnotationTool: Int, CaseIterable {
-    case select, rectangle, arrow, text, pen
+    case select, rectangle, line, arrow, text, pen
     var title: String {
         switch self {
         case .select: "选择"
         case .rectangle: "矩形"
+        case .line: "直线"
         case .arrow: "箭头"
         case .text: "文字"
         case .pen: "画笔"
@@ -15,6 +16,7 @@ enum AnnotationTool: Int, CaseIterable {
         switch self {
         case .select: "cursorarrow"
         case .rectangle: "rectangle"
+        case .line: "line.diagonal"
         case .arrow: "arrow.up.right"
         case .text: "textformat"
         case .pen: "scribble"
@@ -23,7 +25,7 @@ enum AnnotationTool: Int, CaseIterable {
 }
 
 struct Annotation: Identifiable {
-    enum Kind { case rectangle, arrow, text, pen }
+    enum Kind { case rectangle, line, arrow, text, pen }
     var id = UUID()
     var kind: Kind
     var color: NSColor
@@ -50,7 +52,7 @@ struct Annotation: Identifiable {
     var bounds: CGRect {
         switch kind {
         case .rectangle: return rect.standardized
-        case .arrow:
+        case .line, .arrow:
             let box = CGRect(x: min(start.x, end.x), y: min(start.y, end.y),
                              width: abs(end.x - start.x), height: abs(end.y - start.y))
             return box.insetBy(dx: -max(8, lineWidth * 3), dy: -max(8, lineWidth * 3))
@@ -71,7 +73,7 @@ struct Annotation: Identifiable {
             let r = rect.standardized
             return [CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.minY),
                     CGPoint(x: r.maxX, y: r.maxY), CGPoint(x: r.minX, y: r.maxY)]
-        case .arrow: return [start, end]
+        case .line, .arrow: return [start, end]
         default: return []
         }
     }
@@ -79,7 +81,7 @@ struct Annotation: Identifiable {
     func hitTest(_ point: CGPoint, tolerance: CGFloat) -> Bool {
         switch kind {
         case .rectangle: return rect.standardized.insetBy(dx: -tolerance, dy: -tolerance).contains(point)
-        case .arrow: return AnnotationGeometry.distance(point, toSegment: start, end) <= tolerance
+        case .line, .arrow: return AnnotationGeometry.distance(point, toSegment: start, end) <= tolerance
         case .text: return bounds.insetBy(dx: -tolerance, dy: -tolerance).contains(point)
         case .pen:
             guard points.count > 1 else { return points.first.map { AnnotationGeometry.distance(point, $0) <= tolerance } ?? false }
@@ -97,7 +99,7 @@ struct Annotation: Identifiable {
         if box.maxY + dy > size.height { dy = size.height - box.maxY }
         switch kind {
         case .rectangle, .text: rect.origin.x += dx; rect.origin.y += dy
-        case .arrow: start.x += dx; start.y += dy; end.x += dx; end.y += dy
+        case .line, .arrow: start.x += dx; start.y += dy; end.x += dx; end.y += dy
         case .pen: points = points.map { CGPoint(x: $0.x + dx, y: $0.y + dy) }
         }
     }
@@ -118,7 +120,7 @@ struct Annotation: Identifiable {
             if abs(maxY - minY) < 4 { if handle == 0 || handle == 1 { minY = maxY - 4 } else { maxY = minY + 4 } }
             rect = CGRect(x: min(max(0, minX), size.width), y: min(max(0, minY), size.height),
                           width: maxX - minX, height: maxY - minY).intersection(CGRect(origin: .zero, size: size))
-        case .arrow:
+        case .line, .arrow:
             if handle == 0 { start = clamped } else { end = clamped }
         default: break
         }
@@ -128,6 +130,9 @@ struct Annotation: Identifiable {
         Annotation(kind: .rectangle, color: color, lineWidth: lineWidth,
                    rect: CGRect(x: min(start.x, end.x), y: min(start.y, end.y),
                                 width: abs(end.x - start.x), height: abs(end.y - start.y)))
+    }
+    static func line(from start: CGPoint, to end: CGPoint, color: NSColor, lineWidth: CGFloat) -> Annotation {
+        Annotation(kind: .line, color: color, lineWidth: lineWidth, start: start, end: end)
     }
     static func arrow(from start: CGPoint, to end: CGPoint, color: NSColor, lineWidth: CGFloat) -> Annotation {
         Annotation(kind: .arrow, color: color, lineWidth: lineWidth, start: start, end: end)
@@ -171,16 +176,18 @@ enum AnnotationRenderer {
         case .rectangle:
             let path = NSBezierPath(rect: viewRect(annotation.rect.standardized, imageRect: imageRect, scale: scale))
             path.lineWidth = line; path.stroke()
-        case .arrow:
+        case .line, .arrow:
             let a = viewPoint(annotation.start, imageRect: imageRect, scale: scale)
             let b = viewPoint(annotation.end, imageRect: imageRect, scale: scale)
             let path = NSBezierPath(); path.lineWidth = line; path.lineCapStyle = .round
             path.move(to: a); path.line(to: b)
-            let angle = atan2(b.y - a.y, b.x - a.x)
-            let head = max(9, line * 3.2)
-            for offset in [CGFloat.pi * 0.78, -CGFloat.pi * 0.78] {
-                let p = CGPoint(x: b.x + cos(angle + offset) * head, y: b.y + sin(angle + offset) * head)
-                path.move(to: b); path.line(to: p)
+            if annotation.kind == .arrow {
+                let angle = atan2(b.y - a.y, b.x - a.x)
+                let head = max(9, line * 3.2)
+                for offset in [CGFloat.pi * 0.78, -CGFloat.pi * 0.78] {
+                    let p = CGPoint(x: b.x + cos(angle + offset) * head, y: b.y + sin(angle + offset) * head)
+                    path.move(to: b); path.line(to: p)
+                }
             }
             path.stroke()
         case .pen:

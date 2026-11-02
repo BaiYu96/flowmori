@@ -15,9 +15,13 @@ A native macOS menu bar app for clipboard history, annotated screenshots, floati
 ## Features
 
 - **Clipboard history:** Search, favorite, and copy saved text and images. Pause recording or exclude apps. Keeps 500 regular entries by default; favorites are retained.
-- **Screenshots:** Select an area, resize it, and annotate with rectangles, arrows, text, or freehand drawing. Copy, save, or pin the result from the capture toolbar.
+- **Screenshots:** Select an area, resize it, and annotate with rectangles, straight lines, arrows, text, or freehand drawing. Copy, save, or pin the result from the capture toolbar.
 - **Image pins:** Keep clipboard images floating on screen. Move and resize multiple pins, then copy, save, hide, or close them.
 - **Menu bar organization:** Collect supported app icons into a panel while keeping system items visible. Access supported menus and popovers from the panel.
+
+After selecting a screenshot region, choose the line tool and drag to draw a straight line. Adjust its color and width, or use the selection tool to move it and adjust its endpoints. Undo and redo are supported.
+
+See the [changelog](CHANGELOG.md) for version changes.
 
 ## Install
 

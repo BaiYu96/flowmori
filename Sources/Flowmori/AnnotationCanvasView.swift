@@ -181,6 +181,10 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
             }
             needsDisplay = true
             onStateChange?()
+        case .line:
+            draft = .line(from: point, to: point, color: currentColor, lineWidth: currentLineWidth)
+            dragStart = point
+            needsDisplay = true
         case .rectangle, .arrow, .pen:
             draft = tool == .rectangle
                 ? .rectangle(from: point, to: point, color: currentColor, lineWidth: currentLineWidth)
@@ -212,6 +216,10 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
             guard let dragStart else { return }
             draft = .rectangle(from: dragStart, to: point, color: currentColor, lineWidth: currentLineWidth)
             needsDisplay = true
+        case .line:
+            guard let dragStart else { return }
+            draft = .line(from: dragStart, to: point, color: currentColor, lineWidth: currentLineWidth)
+            needsDisplay = true
         case .arrow:
             guard let dragStart else { return }
             draft = .arrow(from: dragStart, to: point, color: currentColor, lineWidth: currentLineWidth)
@@ -236,7 +244,7 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
             lastPoint = nil
             didMutate = false
             needsDisplay = true
-        case .rectangle, .arrow:
+        case .rectangle, .line, .arrow:
             guard var draft, dragStart != nil else { return }
             if abs(draft.end.x - draft.start.x) >= 2 || abs(draft.end.y - draft.start.y) >= 2 || draft.kind == .rectangle {
                 if draft.kind == .rectangle, (draft.rect.width < 2 || draft.rect.height < 2) {
