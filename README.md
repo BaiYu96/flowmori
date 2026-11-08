@@ -15,11 +15,17 @@ A native macOS menu bar app for clipboard history, annotated screenshots, floati
 ## Features
 
 - **Clipboard history:** Search, favorite, and copy saved text and images. Pause recording or exclude apps. Keeps 500 regular entries by default; favorites are retained.
-- **Screenshots:** Select an area, resize it, and annotate with rectangles, straight lines, arrows, text, or freehand drawing. Copy, save, or pin the result from the capture toolbar.
-- **Image pins:** Keep clipboard images floating on screen. Move and resize multiple pins, then copy, save, hide, or close them.
+- **Screenshots:** Select an area, resize it, and annotate with rectangles, straight lines, arrows, text, freehand drawing, or mosaic strokes. Copy, save, or pin the result from the capture toolbar.
+- **Image pins:** Keep clipboard images and rendered text floating on screen. Move and resize multiple pins, then copy, save, hide, or close them.
 - **Menu bar organization:** Collect supported app icons into a panel while keeping system items visible. Access supported menus and popovers from the panel.
 
 After selecting a screenshot region, choose the line tool and drag to draw a straight line. Adjust its color and width, or use the selection tool to move it and adjust its endpoints. Undo and redo are supported.
+
+After selecting a region, press V/R/L/A/T/B/M for selection, rectangle, line, arrow, text, pen, and mosaic. Tool shortcuts pause while entering annotation text. Option+P pins the screenshot at its original position and size, then exits capture.
+
+Outside capture, repeated Option+P presses pin the current clipboard contents followed by history from newest to oldest. Copying new content restarts the sequence; a message appears when history is exhausted. Text becomes a white image with black, wrapped text. Very long text must be split into smaller sections.
+
+Scroll or pinch to resize a pin, double-click to restore its initial size, and Option-scroll to adjust opacity from 20% to 100%. The context menu also provides size and opacity controls.
 
 See the [changelog](CHANGELOG.md) for version changes.
 
@@ -33,7 +39,7 @@ Requires an **Apple Silicon Mac running macOS 26 or later**. The interface is cu
 
 Current releases are **early previews**, ad-hoc signed and not Apple notarized. macOS may block the first launch. Only open builds you trust, using the approval options in System Settings → Privacy & Security; do not disable system security protections. Automatic updates are not available.
 
-Menu bar organization is experimental and only enabled on **macOS 26.6.2, build 25G83**. It uses internal system interfaces; other OS builds leave this feature disabled. Launching a new app may currently cause collection to expand and pause; use “收纳全部” (Collect All) to retry.
+Menu bar organization is experimental and only enabled on **macOS 26.6.2, build 25G83**. It uses internal system interfaces; other OS builds leave this feature disabled. Display changes wait for layout to settle before collection is checked. Collection startup attempts to recover its own icons when hidden by the notch.
 
 ## Quick start
 
@@ -43,7 +49,7 @@ Click the Flowmori menu bar icon to open the collection panel. Right-click it fo
 | --- | --- |
 | Option + V | Toggle clipboard history near the pointer |
 | Option + A | Capture and annotate a screen region |
-| Option + P | Pin the clipboard image |
+| Option + P | Pin clipboard contents and successive history entries; pin the current screenshot |
 | Option + M | Toggle the menu bar collection panel |
 
 Shortcuts can be changed in Settings. Selecting a history item copies it; press **⌘V** in the destination app to paste. To organize icons, enable the feature in Settings, grant Accessibility access, and click “收纳全部” (Collect All).

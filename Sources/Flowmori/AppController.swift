@@ -12,6 +12,8 @@ import OSLog
     let statusItem: NSStatusItem
     var clipboard: ClipboardService?
     var menuManager: MenuBarManager!
+    private var pinPasteboardChange = -1
+    private var pendingPinRecords: [ClipRecord] = []
     private var historyPanel: HistoryPanelController?
     private var collectionPanel: CollectionPanelController!
     private var settingsWindow: NSWindow?
@@ -63,7 +65,7 @@ import OSLog
             if let clipboard = self.clipboard { clipboard.acceptScreenshot(png) }
             else { NSPasteboard.general.clearContents(); NSPasteboard.general.setData(png,forType:.png); self.toast("截图已复制") }
         }
-        capture.onPin = { [weak self] image in self?.pins.pin(image) }
+        capture.onPin = { [weak self] image, rect in self?.pins.pin(image, at:rect) }
         capture.onMessage = { [weak self] message in self?.toast(message) }
         pins.onCopy = { [weak self] data in
             if let clipboard = self?.clipboard { _ = clipboard.write(ClipPayload(kind:.image,imagePNG:data)); clipboard.enqueue(ClipPayload(kind:.image,imagePNG:data)) }
@@ -105,11 +107,45 @@ import OSLog
             if capture.isActive { capture.cancel() }
             else { capture.begin() }
         case .pin:
-            if let image = clipboard?.currentImage() { pins.pin(image) }
-            else if clipboard == nil, let image = NSImage(pasteboard:.general) { pins.pin(image) }
-            else { toast("剪贴板里没有图片。先截图或复制一张图片，再按快捷键贴出。") }
+            if capture.isActive { capture.pinSelection(); return }
+            pinNextClipboardItem()
         case .collection: historyPanel?.close(restore:false); collectionPanel.toggle()
         }
+    }
+    private func pinNextClipboardItem() {
+        let pasteboard = NSPasteboard.general
+        if pinPasteboardChange != pasteboard.changeCount {
+            pinPasteboardChange = pasteboard.changeCount
+            pendingPinRecords = clipboard?.records.sorted { $0.updatedAt > $1.updatedAt } ?? []
+            if let image = clipboard?.currentImage() ?? NSImage(pasteboard:pasteboard) {
+                if let service = clipboard, let match = pendingPinRecords.firstIndex(where: { record in
+                    guard let url = service.imageURL(record), let stored = NSImage(contentsOf:url) else { return false }
+                    return stored.tiffRepresentation == image.tiffRepresentation
+                }) {
+                    pendingPinRecords.remove(at:match)
+                }
+                pins.pin(image)
+                return
+            }
+            if let text = pasteboard.string(forType:.string),
+               !text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty {
+                pendingPinRecords.removeAll { $0.kind == .text && $0.text == text }
+                pins.pinText(text)
+                return
+            }
+        }
+        while !pendingPinRecords.isEmpty {
+            let record = pendingPinRecords.removeFirst()
+            if record.kind == .text {
+                pins.pinText(record.text)
+                return
+            }
+            if let url = clipboard?.imageURL(record), let image = NSImage(contentsOf:url) {
+                pins.pin(image)
+                return
+            }
+        }
+        toast("剪贴板历史已钉完，复制新内容后可重新开始。")
     }
     func changeShortcut(_ action:AppAction,to shortcut:Shortcut) {
         if let current = settings.shortcuts[action], current.matches(shortcut), hotkeyErrors[action] == nil { return }

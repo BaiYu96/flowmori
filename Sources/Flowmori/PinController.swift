@@ -7,14 +7,14 @@ import FlowmoriCore
     var onMessage: ((String) -> Void)?
     var onCopy: ((Data) -> Void)?
     var count: Int { pins.count }
-    func pin(_ image: NSImage) {
+    func pin(_ image: NSImage, at sourceRect: CGRect? = nil) {
         guard image.size.width > 0, image.size.height > 0 else { return }
         guard let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.main else { return }
         let scale = min(max(1,80/image.size.width,60/image.size.height),
                         min(600,screen.visibleFrame.width)/image.size.width,
                         min(500,screen.visibleFrame.height)/image.size.height)
-        let size = CGSize(width:image.size.width*scale,height:image.size.height*scale)
-        let rect = ScreenGeometry.clamped(CGRect(x:NSEvent.mouseLocation.x+12,y:NSEvent.mouseLocation.y-size.height-12,width:size.width,height:size.height),to:screen.visibleFrame)
+        let size = sourceRect?.size ?? CGSize(width:image.size.width*scale,height:image.size.height*scale)
+        let rect = sourceRect ?? ScreenGeometry.clamped(CGRect(x:NSEvent.mouseLocation.x+12,y:NSEvent.mouseLocation.y-size.height-12,width:size.width,height:size.height),to:screen.visibleFrame)
         let panel = NSPanel(contentRect:rect,styleMask:[.borderless,.nonactivatingPanel],backing:.buffered,defer:false)
         panel.level = .floating; panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true
         panel.collectionBehavior = [.canJoinAllSpaces,.fullScreenAuxiliary,.stationary]
@@ -39,6 +39,31 @@ import FlowmoriCore
         if hidden { pins.values.forEach { $0.orderFrontRegardless() } }
         panel.contentView = view; pins[id] = panel; hidden = false; panel.orderFrontRegardless()
     }
+    func pinText(_ text: String) {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byWordWrapping
+        let attributes: [NSAttributedString.Key:Any] = [
+            .font:NSFont.systemFont(ofSize:18),
+            .foregroundColor:NSColor.black,
+            .paragraphStyle:paragraph
+        ]
+        let content = text as NSString
+        let measured = content.boundingRect(with:CGSize(width:440,height:CGFloat.greatestFiniteMagnitude),
+            options:[.usesLineFragmentOrigin,.usesFontLeading],attributes:attributes)
+        let size = CGSize(width:480,height:ceil(measured.height)+40)
+        guard size.height <= 16000 else {
+            onMessage?("文字过长，请分段复制后钉图。")
+            return
+        }
+        let image = NSImage(size:size)
+        image.lockFocus()
+        NSColor.white.setFill()
+        NSRect(origin:.zero,size:size).fill()
+        content.draw(with:NSRect(x:20,y:20,width:440,height:ceil(measured.height)),
+                     options:[.usesLineFragmentOrigin,.usesFontLeading],attributes:attributes)
+        image.unlockFocus()
+        pin(image)
+    }
     func toggleAll() {
         hidden.toggle()
         pins.values.forEach { hidden ? $0.orderOut(nil) : $0.orderFrontRegardless() }
@@ -61,10 +86,11 @@ final class PinView: NSView {
     var onClose: (() -> Void)?
     var onCopy: (() -> Void)?
     var onSave: (() -> Void)?
+    private let originalSize: CGSize
     private let toolbar = NSVisualEffectView()
     private var tracking: NSTrackingArea?
     init(frame:NSRect,image:NSImage) {
-        self.image = image; super.init(frame:frame)
+        self.image = image; originalSize = frame.size; super.init(frame:frame)
         wantsLayer = true; layer?.cornerRadius = 8; layer?.masksToBounds = true
         toolbar.material = .hudWindow; toolbar.blendingMode = .withinWindow; toolbar.state = .active
         toolbar.wantsLayer = true; toolbar.layer?.cornerRadius = 6; toolbar.alphaValue = 0
@@ -81,7 +107,7 @@ final class PinView: NSView {
             stack.leadingAnchor.constraint(equalTo:toolbar.leadingAnchor,constant:8),stack.trailingAnchor.constraint(equalTo:toolbar.trailingAnchor,constant:-8),
             stack.topAnchor.constraint(equalTo:toolbar.topAnchor,constant:5),stack.bottomAnchor.constraint(equalTo:toolbar.bottomAnchor,constant:-5)
         ])
-        toolTip = "拖动移动 · 滚轮或双指缩放 · 右键操作"
+        toolTip = "拖动移动 · 滚轮或双指缩放 · Option+滚轮调透明度 · 双击恢复大小 · 右键操作"
     }
     required init?(coder:NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func draw(_ dirtyRect:NSRect) {
@@ -95,8 +121,26 @@ final class PinView: NSView {
     }
     override func mouseEntered(with event:NSEvent) { toolbar.alphaValue = 1 }
     override func mouseExited(with event:NSEvent) { toolbar.alphaValue = 0 }
-    override func mouseDown(with event:NSEvent) { window?.performDrag(with:event) }
-    override func scrollWheel(with event:NSEvent) { resize(by:pow(1.015,event.scrollingDeltaY)) }
+    override func mouseDown(with event:NSEvent) {
+        if event.clickCount == 2 { resetSize() }
+        else { window?.performDrag(with:event) }
+    }
+    override func scrollWheel(with event:NSEvent) {
+        if event.modifierFlags.contains(.option) {
+            window?.alphaValue = min(1, max(0.2, (window?.alphaValue ?? 1) + event.scrollingDeltaY * 0.01))
+        } else { resize(by:pow(1.015,event.scrollingDeltaY)) }
+    }
+    @objc private func resetSize() {
+        guard let window else { return }
+        let frame = CGRect(x:window.frame.midX-originalSize.width/2,
+                           y:window.frame.midY-originalSize.height/2,
+                           width:originalSize.width,height:originalSize.height)
+        window.setFrame(frame,display:true)
+    }
+    @objc private func zoomIn() { resize(by:1.2) }
+    @objc private func zoomOut() { resize(by:1/1.2) }
+    @objc private func resetOpacity() { window?.alphaValue = 1 }
+    @objc private func halfOpacity() { window?.alphaValue = 0.5 }
     override func magnify(with event:NSEvent) { resize(by:1+event.magnification) }
     private func resize(by factor:CGFloat) {
         guard let window, let screen = window.screen ?? NSScreen.main else { return }
@@ -105,7 +149,7 @@ final class PinView: NSView {
     }
     override func menu(for event:NSEvent) -> NSMenu? {
         let menu = NSMenu()
-        for (title,selector) in [("复制图片",#selector(copyImage)),("保存 PNG…",#selector(saveImage)),("关闭贴图",#selector(closeImage))] {
+        for (title,selector) in [("放大",#selector(zoomIn)),("缩小",#selector(zoomOut)),("恢复初始大小",#selector(resetSize)),("透明度 50%",#selector(halfOpacity)),("透明度 100%",#selector(resetOpacity)),("复制图片",#selector(copyImage)),("保存 PNG…",#selector(saveImage)),("关闭贴图",#selector(closeImage))] {
             let item = NSMenuItem(title:title,action:selector,keyEquivalent:""); item.target = self; menu.addItem(item)
         }
         return menu

@@ -1,7 +1,22 @@
 import AppKit
 
 enum AnnotationTool: Int, CaseIterable {
-    case select, rectangle, line, arrow, text, pen
+    case select, rectangle, line, arrow, text, pen, mosaic
+    var shortcut: String {
+        switch self {
+        case .select: "v"
+        case .rectangle: "r"
+        case .line: "l"
+        case .arrow: "a"
+        case .text: "t"
+        case .pen: "b"
+        case .mosaic: "m"
+        }
+    }
+    static func matching(_ event: NSEvent) -> AnnotationTool? {
+        guard event.modifierFlags.intersection([.command, .option, .control]).isEmpty else { return nil }
+        return allCases.first { $0.shortcut == event.charactersIgnoringModifiers?.lowercased() }
+    }
     var title: String {
         switch self {
         case .select: "选择"
@@ -10,6 +25,7 @@ enum AnnotationTool: Int, CaseIterable {
         case .arrow: "箭头"
         case .text: "文字"
         case .pen: "画笔"
+        case .mosaic: "马赛克"
         }
     }
     var symbol: String {
@@ -20,12 +36,13 @@ enum AnnotationTool: Int, CaseIterable {
         case .arrow: "arrow.up.right"
         case .text: "textformat"
         case .pen: "scribble"
+        case .mosaic: "square.grid.3x3.fill"
         }
     }
 }
 
 struct Annotation: Identifiable {
-    enum Kind { case rectangle, line, arrow, text, pen }
+    enum Kind { case rectangle, line, arrow, text, pen, mosaic }
     var id = UUID()
     var kind: Kind
     var color: NSColor
@@ -34,6 +51,7 @@ struct Annotation: Identifiable {
     var start: CGPoint = .zero
     var end: CGPoint = .zero
     var points: [CGPoint] = []
+    var mosaicImage: CGImage?
     var text: String = ""
     var fontSize: CGFloat = 22
     var textWidth: CGFloat = 260
@@ -57,7 +75,7 @@ struct Annotation: Identifiable {
                              width: abs(end.x - start.x), height: abs(end.y - start.y))
             return box.insetBy(dx: -max(8, lineWidth * 3), dy: -max(8, lineWidth * 3))
         case .text: return CGRect(x: rect.minX, y: rect.minY, width: max(20, textWidth), height: textHeight)
-        case .pen:
+        case .pen, .mosaic:
             guard let first = points.first else { return .zero }
             var box = CGRect(origin: first, size: .zero)
             for point in points.dropFirst() {
@@ -83,7 +101,7 @@ struct Annotation: Identifiable {
         case .rectangle: return rect.standardized.insetBy(dx: -tolerance, dy: -tolerance).contains(point)
         case .line, .arrow: return AnnotationGeometry.distance(point, toSegment: start, end) <= tolerance
         case .text: return bounds.insetBy(dx: -tolerance, dy: -tolerance).contains(point)
-        case .pen:
+        case .pen, .mosaic:
             guard points.count > 1 else { return points.first.map { AnnotationGeometry.distance(point, $0) <= tolerance } ?? false }
             for index in 1..<points.count where AnnotationGeometry.distance(point, toSegment: points[index - 1], points[index]) <= tolerance { return true }
             return false
@@ -100,7 +118,7 @@ struct Annotation: Identifiable {
         switch kind {
         case .rectangle, .text: rect.origin.x += dx; rect.origin.y += dy
         case .line, .arrow: start.x += dx; start.y += dy; end.x += dx; end.y += dy
-        case .pen: points = points.map { CGPoint(x: $0.x + dx, y: $0.y + dy) }
+        case .pen, .mosaic: points = points.map { CGPoint(x: $0.x + dx, y: $0.y + dy) }
         }
     }
 
@@ -190,6 +208,21 @@ enum AnnotationRenderer {
                 }
             }
             path.stroke()
+        case .mosaic:
+            guard let image = annotation.mosaicImage, let first = annotation.points.first,
+                  let context = NSGraphicsContext.current?.cgContext else { return }
+            let path = CGMutablePath()
+            path.move(to: viewPoint(first, imageRect: imageRect, scale: scale))
+            for point in annotation.points.dropFirst() {
+                path.addLine(to: viewPoint(point, imageRect: imageRect, scale: scale))
+            }
+            context.saveGState()
+            context.addPath(path.copy(strokingWithWidth: line, lineCap: .round, lineJoin: .round, miterLimit: 10))
+            context.clip()
+            NSImage(cgImage: image, size: imageRect.size).draw(in: imageRect, from: .zero,
+                operation: .sourceOver, fraction: 1, respectFlipped: true,
+                hints: [.interpolation: NSImageInterpolation.none])
+            context.restoreGState()
         case .pen:
             guard let first = annotation.points.first else { return }
             let path = NSBezierPath(); path.lineWidth = line; path.lineCapStyle = .round; path.lineJoinStyle = .round

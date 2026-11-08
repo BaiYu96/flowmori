@@ -10,7 +10,7 @@ import FlowmoriCore
     private var sessionID: UUID?
     private var operation: Task<Void,Never>?
     var onScreenshot: ((Data) -> Void)?
-    var onPin: ((NSImage) -> Void)?
+    var onPin: ((NSImage, CGRect) -> Void)?
     var onMessage: ((String) -> Void)?
     var beforeCapture: (() -> Void)?
     var isActive: Bool { capturing }
@@ -48,7 +48,7 @@ import FlowmoriCore
                     let panel = SelectionPanel(screen:screen,image:image)
                     panel.selectionView.onCancel = { [weak self] in self?.cancel() }
                     panel.selectionView.onCopy = { [weak self] png in self?.finish(.copy(png)) }
-                    panel.selectionView.onPin = { [weak self] image in self?.finish(.pin(image)) }
+                    panel.selectionView.onPin = { [weak self] image, rect in self?.finish(.pin(image, rect)) }
                     panel.selectionView.onMessage = { [weak self] message in self?.onMessage?(message) }
                     panels.append(panel); panel.orderFrontRegardless()
                 }
@@ -63,14 +63,20 @@ import FlowmoriCore
     }
     private enum Output {
         case copy(Data)
-        case pin(NSImage)
+        case pin(NSImage, CGRect)
     }
     private func finish(_ output: Output) {
-        endSession(restoreFocus:true)
         switch output {
-        case .copy(let png): onScreenshot?(png)
-        case .pin(let image): onPin?(image)
+        case .copy(let png):
+            endSession(restoreFocus:true)
+            onScreenshot?(png)
+        case .pin(let image, let rect):
+            endSession(restoreFocus:true)
+            onPin?(image, rect)
         }
+    }
+    func pinSelection() {
+        panels.first(where: { $0.isKeyWindow })?.selectionView.pin()
     }
     func cancel() { _ = endSession(restoreFocus:true) }
     @discardableResult private func endSession(restoreFocus: Bool) -> NSRunningApplication? {

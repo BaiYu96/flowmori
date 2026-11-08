@@ -1,7 +1,13 @@
 import AppKit
+import CoreImage
 
 final class AnnotationCanvasView: NSView, NSTextViewDelegate {
     let image: CGImage
+    private lazy var mosaicImage: CGImage? = {
+        let input = CIImage(cgImage: image)
+        let output = input.applyingFilter("CIPixellate", parameters: [kCIInputScaleKey: 16])
+        return CIContext().createCGImage(output, from: input.extent)
+    }()
     var annotations: [Annotation] = []
     var tool: AnnotationTool = .rectangle {
         didSet {
@@ -14,6 +20,7 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
     var currentLineWidth: CGFloat = 4
     var imageFillsBounds = false
     var onStateChange: (() -> Void)?
+    var onToolChange: ((AnnotationTool) -> Void)?
     var onCancel: (() -> Void)?
     var onConfirm: (() -> Void)?
     private(set) var undoStack: [[Annotation]] = []
@@ -79,7 +86,7 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
             AnnotationRenderer.draw(annotation, imageRect: target, scale: displayScale)
         }
         if let draft { AnnotationRenderer.draw(draft, imageRect: target, scale: displayScale) }
-        if let selected = selectedAnnotation {
+        if let selected = selectedAnnotation, selected.kind != .mosaic {
             drawSelection(selected)
         }
     }
@@ -181,6 +188,12 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
             }
             needsDisplay = true
             onStateChange?()
+        case .mosaic:
+            draft = Annotation(kind: .mosaic, color: currentColor,
+                               lineWidth: max(24, currentLineWidth * 8),
+                               points: [point], mosaicImage: mosaicImage)
+            dragStart = point
+            needsDisplay = true
         case .line:
             draft = .line(from: point, to: point, color: currentColor, lineWidth: currentLineWidth)
             dragStart = point
@@ -224,7 +237,7 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
             guard let dragStart else { return }
             draft = .arrow(from: dragStart, to: point, color: currentColor, lineWidth: currentLineWidth)
             needsDisplay = true
-        case .pen:
+        case .pen, .mosaic:
             draft?.points.append(point)
             needsDisplay = true
         case .text:
@@ -256,7 +269,7 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
                 selectedID = draft.id
             }
             self.draft = nil; dragStart = nil; needsDisplay = true; onStateChange?()
-        case .pen:
+        case .pen, .mosaic:
             guard var draft, draft.points.count > 1 else { self.draft = nil; dragStart = nil; needsDisplay = true; return }
             draft.id = UUID()
             pushUndo(annotations)
@@ -269,6 +282,11 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
     }
 
     override func keyDown(with event: NSEvent) {
+        if !isEditingText, let tool = AnnotationTool.matching(event) {
+            selectTool(tool)
+            onToolChange?(tool)
+            return
+        }
         if event.keyCode == 53 {
             if isEditingText { endTextEditing() }
             else if draft != nil { draft = nil; dragStart = nil; needsDisplay = true }

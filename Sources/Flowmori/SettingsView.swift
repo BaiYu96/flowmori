@@ -134,7 +134,7 @@ struct SettingsView: View {
             .accessibilityLabel("Flowmori 应用图标")
     }
     private var shortVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.47"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "未知"
     }
     private var platformMajorVersion: Int {
         ProcessInfo.processInfo.operatingSystemVersion.majorVersion

@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 final class SelectionView: NSView {
     let image: CGImage
     var onCopy: ((Data) -> Void)?
-    var onPin: ((NSImage) -> Void)?
+    var onPin: ((NSImage, CGRect) -> Void)?
     var onCancel: (() -> Void)?
     var onMessage: ((String) -> Void)?
 
@@ -227,6 +227,7 @@ final class SelectionView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
+        if selection != nil, let tool = AnnotationTool.matching(event) { apply(tool); return }
         if event.keyCode == 53 { onCancel?(); return }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if modifiers.contains(.option), event.charactersIgnoringModifiers?.lowercased() == "a" { onCancel?(); return }
@@ -237,6 +238,10 @@ final class SelectionView: NSView {
     override func cancelOperation(_ sender: Any?) { onCancel?() }
 
     func handleKeyDown(_ event: NSEvent) {
+        if event.modifierFlags.contains(.option), event.keyCode == 35 { pin(); return }
+        if canvas?.isEditingText != true, selection != nil, let tool = AnnotationTool.matching(event) {
+            apply(tool); return
+        }
         if let canvas { canvas.keyDown(with: event) }
         else { keyDown(with: event) }
     }
@@ -281,6 +286,7 @@ final class SelectionView: NSView {
             bar.onRedo = { [weak self] in self?.canvas?.redo(); self?.restoreFirstResponder() }
             bar.onDelete = { [weak self] in self?.canvas?.deleteSelected(); self?.restoreFirstResponder() }
             bar.onSave = { [weak self] in self?.save() }
+            canvas?.onToolChange = { [weak self] tool in self?.apply(tool) }
             bar.onPin = { [weak self] in self?.pin() }
             bar.onCancel = { [weak self] in self?.onCancel?() }
             bar.onConfirm = { [weak self] in self?.confirm() }
@@ -392,11 +398,11 @@ final class SelectionView: NSView {
         onCopy?(png)
     }
 
-    private func pin() {
-        guard !isCompleting, selection != nil else { return }
+    func pin() {
+        guard !isCompleting, let selection, let window else { return }
         guard let png = renderPNG(), let image = NSImage(data: png) else { fail("无法生成截图，请重试。"); return }
         isCompleting = true
-        onPin?(image)
+        onPin?(image, window.convertToScreen(convert(selection, to:nil)))
     }
 
     private func save() {
@@ -476,7 +482,7 @@ final class CaptureToolbarView: NSView {
         ])
 
         for tool in AnnotationTool.allCases {
-            let button = iconButton(tool.symbol, label: tool.title)
+            let button = iconButton(tool.symbol, label: "\(tool.title)（\(tool.shortcut.uppercased())）")
             button.tag = tool.rawValue
             button.target = self
             button.action = #selector(pickTool(_:))
@@ -526,7 +532,7 @@ final class CaptureToolbarView: NSView {
         stack.addArrangedSubview(separator())
 
         let save = iconButton("square.and.arrow.down", label: "保存截图")
-        let pin = iconButton("pin", label: "贴到屏幕")
+        let pin = iconButton("pin", label: "贴到屏幕（Option+P）")
         save.target = self; save.action = #selector(saveAction)
         pin.target = self; pin.action = #selector(pinAction)
         stack.addArrangedSubview(save)

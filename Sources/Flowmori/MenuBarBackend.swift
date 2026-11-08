@@ -401,11 +401,13 @@ final class MenuBarSystem {
         }
         observers.append(NotificationCenter.default.addObserver(forName:NSApplication.didChangeScreenParametersNotification,object:nil,queue:.main) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self else { return }; self.operation?.cancel(); self.showAll(); self.refresh()
+                guard let self else { return }
+                self.operation?.cancel()
                 self.system.invalidateOwnershipScan()
                 self.clearInlineCaches()
                 self.lastLifecycleEvent = "screenParametersChanged"
-                self.message = "显示器已变化，收纳已展开。确认图标位置后可再次收起。"
+                self.nextOwnershipRefresh = .distantPast
+                self.layout.changed()
             }
         })
         timer = Timer.scheduledTimer(withTimeInterval:3,repeats:true) { [weak self] _ in
@@ -487,6 +489,9 @@ final class MenuBarSystem {
         }
         do {
             let all = try system.entries()
+            if needsCollection && ownershipTask == nil {
+                collectAll(); return
+            }
             guard let id = dividerID, let bar = system.frame(id), let anchorID = controlID,
                   let anchor = system.frame(anchorID) else {
                 showAll(); message = "暂时无法确认菜单栏图标位置，已展开。等待系统布局后自动重试。"; return
@@ -507,9 +512,6 @@ final class MenuBarSystem {
                     }
                     message = "发现 \(newItems.count) 个新图标，点击「收纳全部」以收纳。"
                 }
-            }
-            if needsCollection && ownershipTask == nil {
-                collectAll(); return
             }
             guard bar.maxX <= anchor.minX + 2 else {
                 showAll(); message = "点击「收纳全部」自动整理菜单栏。"; return
@@ -575,7 +577,7 @@ final class MenuBarSystem {
     /// A status item behind the notch cannot receive a reliable drag. Reinsert
     /// our own AppKit item using its saved position, preserving button handlers.
     /// This preference mechanism is confined to the supported-build adapter.
-    private func placeOwn(_ item: NSStatusItem, before neighborID: CGWindowID) async throws {
+    private func ensureOwnItemReachable(_ item: NSStatusItem) async throws {
         guard system.sessionAllowsInput, let name = item.autosaveName else { throw MenuBarError.unsafePosition }
         if let id = windowID(for:item), let rect = system.frame(id), isReachable(rect) {
             // Already visible: retain the existing window and its identity.
@@ -591,6 +593,12 @@ final class MenuBarSystem {
             item.isVisible = true
             try await system.waitForStableLayout()
         }
+        guard let id = windowID(for:item), let rect = system.frame(id), isReachable(rect) else {
+            throw MenuBarError.unsafePosition
+        }
+    }
+    private func placeOwn(_ item: NSStatusItem, before neighborID: CGWindowID) async throws {
+        try await ensureOwnItemReachable(item)
         guard let id = windowID(for:item), let rect = system.frame(id), isReachable(rect),
               let entry = try system.entries().first(where: { $0.id == id }) else { throw MenuBarError.unsafePosition }
         try await system.drag(entry,before:neighborID)
@@ -621,6 +629,10 @@ final class MenuBarSystem {
             guard let self else { return }
             do {
                 try await system.waitForStableLayout()
+                // Recover our hidden status windows before resolving IDs or planning.
+                try await ensureOwnItemReachable(control)
+                try await ensureOwnItemReachable(divider)
+                try await ensureOwnItemReachable(control)
                 guard await system.refreshOwnership(), let originalSplitID = dividerID, let originalMainID = controlID else { throw MenuBarError.disappeared }
                 var all = try system.entries()
                 let plan = MenuCollectionPlan(items:all.map {
