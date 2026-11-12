@@ -238,14 +238,18 @@ final class MenuBarSystem {
             try await Task.sleep(for:.milliseconds(20))
         }
     }
-    @MainActor func waitForStableLayout() async throws {
+    @MainActor func waitForStableLayout(windowIDs: Set<CGWindowID>? = nil) async throws {
         // Let the initial layout transaction begin before sampling its animation.
         try await Task.sleep(for:.milliseconds(200))
         var stability = MenuLayoutStability()
         for _ in 0..<30 {
             try Task.checkCancellation()
             guard sessionAllowsInput else { throw MenuBarError.operationCancelled }
-            let windows = try entries().map { MenuWindowResolver.Candidate(id:$0.id,pid:$0.pid,frame:$0.frame) }
+            let windows = try entries().filter { windowIDs?.contains($0.id) ?? true }
+                .map { MenuWindowResolver.Candidate(id:$0.id,pid:$0.pid,frame:$0.frame) }
+            if let windowIDs, Set(windows.map(\.id)) != windowIDs {
+                throw MenuBarError.disappeared
+            }
             if stability.observe(windows) { return }
             try await Task.sleep(for:.milliseconds(100))
         }
@@ -266,7 +270,7 @@ final class MenuBarSystem {
             case .failed: throw MenuBarError.moveFailed
             case .move(let point):
                 try await drag(entry,to:point)
-                try await waitForStableLayout()
+                try await waitForStableLayout(windowIDs:[entry.id, neighborID])
             }
         }
     }
@@ -617,6 +621,7 @@ final class MenuBarSystem {
     func collectAll() {
         guard !operating, system.available, system.sessionAllowsInput else { return }
         holdMessage = false
+        closePanel?()
         suspended = false
         if !settings.menuEnabled { enable(true); return }
         guard AXIsProcessTrusted() else { message = MenuBarError.permission.localizedDescription; return }
@@ -678,7 +683,12 @@ final class MenuBarSystem {
                 lastOperationOutcome = "collectedAll"
                 collectionStage = "completed"
             } catch is CancellationError { lastOperationOutcome = "collectionCancelled"; fail(MenuBarError.operationCancelled) }
-            catch { lastOperationOutcome = "collectionFailed"; fail(error) }
+            catch {
+                lastOperationOutcome = "collectionFailed"
+                fail(error)
+                message = "收纳失败（\(collectionStage)）：\(error.localizedDescription)"
+                onMessage?(message)
+            }
             operating = false; operation = nil; refresh()
         }
     }
