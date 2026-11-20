@@ -1,5 +1,17 @@
 # Changelog / 更新日志
 
+## 0.1.50 — 2026-11-20
+
+- Improved collection in crowded menu bars and near the notch by arranging manageable icons before positioning the collection controls.
+- 优化图标较多及刘海附近的收纳排序，先整理可管理图标，再定位收纳控制项。
+- Route native clicks to the status-window host with its window ID; read standard menus dynamically and execute selections in the source app. Preserve left/right click identity in menu caching and execution.
+- 原生点击携带窗口 ID 并发往状态图标宿主；实时读取标准菜单并在源应用执行菜单项，缓存和执行保留左右键区别，改善向日葵等应用的菜单访问。
+- Bring newly opened off-screen native popovers into the visible display without moving the collected icon, including supported WPS popovers.
+- 将新打开在屏幕外、支持窗口定位的原生弹窗移到可见区域，改善 WPS 弹窗显示，收纳图标保持原位。
+- Lower the collection panel below native popovers and keep it open while interacting with them.
+- 降低收纳盒面板层级，避免遮挡原生弹窗；弹窗打开、操作及关闭时不再主动关闭收纳盒。
+- App version 0.1.50, build 50. / 应用版本 0.1.50，构建号 50。
+
 ## 0.1.49 — 2026-11-08
 
 - Added mosaic brushing without a dashed selection outline and V/R/L/A/T/B/M screenshot tool shortcuts.

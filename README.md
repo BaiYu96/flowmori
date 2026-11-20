@@ -41,6 +41,8 @@ Current releases are **early previews**, ad-hoc signed and not Apple notarized. 
 
 Menu bar organization is experimental and only enabled on **macOS 26.6.2, build 25G83**. It uses internal system interfaces; other OS builds leave this feature disabled. Display changes wait for layout to settle before collection is checked. Collection startup attempts to recover its own icons when hidden by the notch.
 
+Standard menus are read dynamically through Accessibility and selections execute in the source app. Supported native popovers opened off-screen are positioned on the visible display while icons remain collected. The collection panel stays below native popovers and remains open during interaction. Custom menus and apps without the required Accessibility interfaces may not be supported.
+
 ## Quick start
 
 Click the Flowmori menu bar icon to open the collection panel. Right-click it for all tools, Settings, and Quit.

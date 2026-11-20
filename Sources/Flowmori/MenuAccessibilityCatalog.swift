@@ -6,6 +6,42 @@ struct MenuBarOwner: Sendable {
     let bundleID: String
     let name: String
 }
+/// WindowServer hosts status buttons separately from their owning application.
+/// Capture identity only; resolve live coordinates again before every click.
+struct NativeStatusMenuTarget: Sendable {
+    let windowID: CGWindowID
+    let hostPID: pid_t
+
+    func click(target:AXUIElement, right:Bool) -> Bool {
+        guard AXIsProcessTrusted(), let info = (CGWindowListCopyWindowInfo(.optionAll,kCGNullWindowID) as? [[String:Any]])?.first(where: { $0[kCGWindowNumber as String] as? CGWindowID == windowID }),
+              info[kCGWindowOwnerPID as String] as? pid_t == hostPID,
+              let bounds = info[kCGWindowBounds as String] as? [String:Any],
+              let rect = CGRect(dictionaryRepresentation:bounds as CFDictionary), !rect.isEmpty,
+              let position = MenuAccessibilityCatalog.attribute(target,kAXPositionAttribute),
+              let size = MenuAccessibilityCatalog.attribute(target,kAXSizeAttribute),
+              CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID() else { return false }
+        var point = CGPoint.zero, dimensions = CGSize.zero
+        guard AXValueGetValue(unsafeBitCast(position,to:AXValue.self),.cgPoint,&point),
+              AXValueGetValue(unsafeBitCast(size,to:AXValue.self),.cgSize,&dimensions),
+              abs(point.x + dimensions.width / 2 - rect.midX) < 3,
+              abs(point.y + dimensions.height / 2 - rect.midY) < 3,
+              MenuAccessibilityCatalog.sessionAllowsInput(),
+              let source = CGEventSource(stateID:.hidSystemState),
+              let down = CGEvent(mouseEventSource:source,mouseType:right ? .rightMouseDown : .leftMouseDown,mouseCursorPosition:CGPoint(x:rect.midX,y:rect.midY),mouseButton:right ? .right : .left),
+              let up = CGEvent(mouseEventSource:source,mouseType:right ? .rightMouseUp : .leftMouseUp,mouseCursorPosition:CGPoint(x:rect.midX,y:rect.midY),mouseButton:right ? .right : .left) else { return false }
+        for event in [down,up] {
+            event.flags = []
+            for field in [CGEventField.mouseEventWindowUnderMousePointer,.mouseEventWindowUnderMousePointerThatCanHandleThisEvent,CGEventField(rawValue:0x33)!] {
+                event.setIntegerValueField(field,value:Int64(windowID))
+            }
+            event.setIntegerValueField(.eventTargetUnixProcessID,value:Int64(hostPID))
+            event.setIntegerValueField(.mouseEventClickState,value:1)
+            event.postToPid(hostPID)
+            if event === down { usleep(70_000) }
+        }
+        return true
+    }
+}
 struct AccessibleMenuItem: Sendable {
     let owner: MenuBarOwner
     let frame: CGRect
@@ -47,6 +83,30 @@ struct InlineMenuPreparation: Sendable {
 /// macOS 26 renders third-party status items inside Control Center. Their
 /// application identity comes from the original application's extra menu bar.
 enum MenuAccessibilityCatalog {
+    /// Move only the newly opened source window whose geometry was observed by
+    /// WindowServer. Never move a status item or an unrelated document window.
+    static func positionPopover(owner:MenuBarOwner, matching frame:CGRect, at point:CGPoint) -> Bool {
+        guard sessionAllowsInput(), AXIsProcessTrusted() else { return false }
+        let app = AXUIElementCreateApplication(owner.pid)
+        let windows = attribute(app,kAXWindowsAttribute) as? [AXUIElement] ?? []
+        for window in windows {
+            guard let position = attribute(window,kAXPositionAttribute),
+                  let size = attribute(window,kAXSizeAttribute),
+                  CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID() else { continue }
+            var origin = CGPoint.zero, dimensions = CGSize.zero
+            guard AXValueGetValue(unsafeBitCast(position,to:AXValue.self),.cgPoint,&origin),
+                  AXValueGetValue(unsafeBitCast(size,to:AXValue.self),.cgSize,&dimensions),
+                  abs(origin.x-frame.minX)<2, abs(origin.y-frame.minY)<2,
+                  abs(dimensions.width-frame.width)<2, abs(dimensions.height-frame.height)<2 else { continue }
+            var settable:DarwinBoolean = false
+            guard AXUIElementIsAttributeSettable(window,kAXPositionAttribute as CFString,&settable) == .success,
+                  settable.boolValue, sessionAllowsInput() else { return false }
+            var destination = point
+            guard let value = AXValueCreate(.cgPoint,&destination) else { return false }
+            return AXUIElementSetAttributeValue(window,kAXPositionAttribute as CFString,value) == .success
+        }
+        return false
+    }
     static func scan(_ owners:[MenuBarOwner]) -> [AccessibleMenuItem] {
         var result: [AccessibleMenuItem] = []
         for owner in owners {
@@ -112,7 +172,7 @@ enum MenuAccessibilityCatalog {
     /// Perform the slow AX activation and snapshot away from the main thread.
     /// The returned node tree is immutable, so it can be presented later without
     /// retaining AX elements that die when the source menu closes.
-    static func prepare(owner:MenuBarOwner, frame:CGRect, label:String, right:Bool, request:InlinePreparationRequest = InlinePreparationRequest()) -> InlineMenuPreparation {
+    static func prepare(owner:MenuBarOwner, frame:CGRect, label:String, right:Bool, request:InlinePreparationRequest = InlinePreparationRequest(), native:NativeStatusMenuTarget? = nil) -> InlineMenuPreparation {
         guard !request.isCancelled, sessionAllowsInput() else {
             return InlineMenuPreparation(nodes:[],action:"",supported:[],error:.cannotComplete,failure:.cancelled)
         }
@@ -121,14 +181,19 @@ enum MenuAccessibilityCatalog {
             plan = resolve(owner,frame:frame,label:label,right:false)
         }
         let started = ProcessInfo.processInfo.systemUptime
-        guard let target = plan.target, plan.supported.contains(plan.action) else {
+        guard let target = plan.target, native != nil || plan.supported.contains(plan.action) else {
             return InlineMenuPreparation(nodes:[],action:plan.action,supported:plan.supported,
                                          error:plan.error,failure:.unavailable)
         }
         guard !request.isCancelled else {
             return InlineMenuPreparation(nodes:[],action:plan.action,supported:plan.supported,error:.cannotComplete,failure:.cancelled)
         }
-        start(plan)
+        if let native {
+            guard native.click(target:target,right:right) else {
+                return InlineMenuPreparation(nodes:[],action:"native-click",supported:plan.supported,error:.invalidUIElement,failure:.unavailable)
+            }
+            plan = ActivationPlan(supported:plan.supported,action:right ? "native-right-click" : "native-left-click",target:target,error:.success)
+        } else { start(plan) }
         var menu: AXUIElement?
         var nodes: [InlineMenuNode] = []
         var opened = false
@@ -174,7 +239,7 @@ enum MenuAccessibilityCatalog {
         return InlineMenuPreparation(nodes:nodes,action:plan.action,supported:plan.supported,
                                      error:.success,failure:nil)
     }
-    private static func sessionAllowsInput() -> Bool {
+    fileprivate static func sessionAllowsInput() -> Bool {
         guard let session = CGSessionCopyCurrentDictionary() as? [String:Any] else { return false }
         return (session["CGSSessionScreenIsLocked"] as? Bool) != true &&
                (session[kCGSessionOnConsoleKey as String] as? Bool) == true
@@ -201,12 +266,14 @@ enum MenuAccessibilityCatalog {
     /// Re-open the status-item menu, walk to the same item path, and press it
     /// while the native menu is still alive. Elements captured for the inline
     /// snapshot are usually invalidated when the menu closes.
-    static func press(owner:MenuBarOwner,frame:CGRect,label:String,path:[Int],expected:[[String]]) -> AXError {
+    static func press(owner:MenuBarOwner,frame:CGRect,label:String,path:[Int],expected:[[String]],right:Bool = false,native:NativeStatusMenuTarget? = nil) -> AXError {
         guard sessionAllowsInput(), !Task.isCancelled else { return .cannotComplete }
-        let plan = resolve(owner,frame:frame,label:label,right:false)
+        let plan = resolve(owner,frame:frame,label:label,right:right)
         inlineDebugLog("source activate action=\(plan.action) error=\(plan.error.rawValue) supported=\(plan.supported)")
-        guard let target = plan.target, plan.supported.contains(plan.action) else { return plan.error }
-        start(plan)
+        guard let target = plan.target, native != nil || plan.supported.contains(plan.action) else { return plan.error }
+        if let native {
+            guard native.click(target:target,right:right) else { return .invalidUIElement }
+        } else { start(plan) }
         var menu: AXUIElement?
         var opened = false
         for _ in 0..<40 {
@@ -303,7 +370,7 @@ enum MenuAccessibilityCatalog {
         }
         return value
     }
-    private static func attribute(_ element:AXUIElement,_ name:String) -> CFTypeRef? {
+    fileprivate static func attribute(_ element:AXUIElement,_ name:String) -> CFTypeRef? {
         AXUIElementSetMessagingTimeout(element,0.15)
         var result: CFTypeRef?
         return AXUIElementCopyAttributeValue(element,name as CFString,&result) == .success ? result : nil

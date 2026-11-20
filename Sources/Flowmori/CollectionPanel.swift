@@ -12,7 +12,9 @@ import FlowmoriCore
     init(manager:MenuBarManager,settings:Settings,statusItem:NSStatusItem) {
         self.manager = manager; self.statusItem = statusItem
         panel = KeyPanel(contentRect:NSRect(x:0,y:0,width:430,height:340),styleMask:[.borderless,.nonactivatingPanel],backing:.buffered,defer:false)
-        panel.level = .popUpMenu; panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true
+        // Float above document windows, but below source applications' status
+        // popovers (for example WPS at level 24) and native menus.
+        panel.level = .floating; panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true
         panel.collectionBehavior = [.moveToActiveSpace,.fullScreenAuxiliary]; panel.isReleasedWhenClosed = false
         panel.contentView = NSHostingView(rootView:CollectionView(manager:manager,settings:settings,onSettings:{ [weak self] in self?.close(); self?.onSettings?() }))
         manager.closePanel = { [weak self] in self?.close() }

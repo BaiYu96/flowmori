@@ -222,6 +222,14 @@ final class MenuBarSystem {
         guard let down = event(.leftMouseDown,entry:entry,point:start,command:true),
               let up = event(.leftMouseUp,entry:entry,point:point,command:true) else { throw MenuBarError.moveFailed }
         invalidateOwnershipScan()
+        let cursorPosition = CGEvent(source:nil)?.location
+        CGWarpMouseCursorPosition(start)
+        defer {
+            if let cursorPosition { CGWarpMouseCursorPosition(cursorPosition) }
+        }
+        try await Task.sleep(for:.milliseconds(20))
+        try Task.checkCancellation()
+        guard sessionAllowsInput else { throw MenuBarError.operationCancelled }
         down.post(tap:.cgSessionEventTap)
         // Always release the synthetic button, including cancellation/error paths.
         defer { up.post(tap:.cgSessionEventTap); invalidateOwnershipScan() }
@@ -339,12 +347,14 @@ final class MenuBarSystem {
     private var inlinePresenter: NativeInlineMenuPresenter?
     private var inlineRoot: [InlineMenuNode] = []
     private var inlineEntry: MenuBarEntry?
+    private var inlineRight = false
     private var menuAnchor = NSPoint.zero
     private var preparingInline = false
     private var directFailureUntil = Date.distantPast
     private var inlineCache: [CGWindowID: CachedInlineMenu] = [:]
     private var unavailableCache: [CGWindowID: UnavailableInlineMenu] = [:]
     private struct CachedInlineMenu {
+        let right: Bool
         let nodes: [InlineMenuNode]
         let createdAt: Date
         let ownerPID: pid_t
@@ -605,6 +615,14 @@ final class MenuBarSystem {
         try await ensureOwnItemReachable(item)
         guard let id = windowID(for:item), let rect = system.frame(id), isReachable(rect),
               let entry = try system.entries().first(where: { $0.id == id }) else { throw MenuBarError.unsafePosition }
+        returnPlacementTrace.removeAll()
+        system.placementObserver = { [weak self] source, neighbor in
+            self?.returnPlacementTrace.append([
+                "source": source.map(NSStringFromRect) ?? "missing",
+                "neighbor": neighbor.map(NSStringFromRect) ?? "missing"
+            ])
+        }
+        defer { system.placementObserver = nil }
         try await system.drag(entry,before:neighborID)
     }
     /// Explicit user exit for icons that cannot be activated directly. This is
@@ -647,6 +665,19 @@ final class MenuBarSystem {
                 let journal: [String:Any] = ["operation":"collectAll", "windows":plan.targets,
                                             "created":Date().timeIntervalSince1970]
                 try JSONSerialization.data(withJSONObject:journal).write(to:recoveryFile,options:.atomic)
+                collectionStage = "partition"
+                if let firstRetained = plan.retained.first {
+                    for target in targets {
+                        try Task.checkCancellation()
+                        guard let targetFrame = system.frame(target.id),
+                              let retainedFrame = system.frame(firstRetained) else {
+                            throw MenuBarError.disappeared
+                        }
+                        if targetFrame.maxX <= retainedFrame.minX + 3 { continue }
+                        guard isReachable(targetFrame) else { throw MenuBarError.unsafePosition }
+                        try await system.drag(target,before:firstRetained)
+                    }
+                }
                 collectionStage = "control"
                 if let firstRetained = plan.retained.first {
                     try await placeOwn(control,before:firstRetained)
@@ -775,16 +806,16 @@ final class MenuBarSystem {
         if let unavailable = cachedUnavailable(for:current) {
             throw MenuBarError.directUnavailable(unavailable)
         }
-        if let cached = cachedInlineMenu(for:current) {
+        if let cached = cachedInlineMenu(for:current,right:right) {
             returnDetail = "panel=\(right ? "right" : "left") cache=hit nodes=\(cached.count)"
             operationStage = "panel-menu"
-            presentInlineMenu(cached,entry:current)
+            presentInlineMenu(cached,entry:current,right:right)
             return
         }
         let owner = MenuBarOwner(pid:current.ownerPID,bundleID:current.bundleID,name:current.name)
         let frame = current.frame
         let label = current.title
-        let before = popoverWindows(current)
+        let before = popoverWindows(current,includingOffscreen:true)
         preparingInline = true
         defer { preparingInline = false }
         holdMessage = true
@@ -792,7 +823,7 @@ final class MenuBarSystem {
         let request = InlinePreparationRequest()
         defer { request.cancel() }
         DispatchQueue.global(qos:.userInitiated).async {
-            request.complete(MenuAccessibilityCatalog.prepare(owner:owner,frame:frame,label:label,right:right,request:request))
+            request.complete(MenuAccessibilityCatalog.prepare(owner:owner,frame:frame,label:label,right:right,request:request,native:NativeStatusMenuTarget(windowID:current.id,hostPID:current.pid)))
         }
         let deadline = ProcessInfo.processInfo.systemUptime + 2
         var candidateWindows = Set<UInt32>()
@@ -810,7 +841,6 @@ final class MenuBarSystem {
             }
             if !windows.isEmpty, ProcessInfo.processInfo.systemUptime - candidateSince >= 0.3 {
                 detectedPopover = windows
-                closePanel?()
                 break
             }
             try await Task.sleep(for:.milliseconds(50))
@@ -820,7 +850,7 @@ final class MenuBarSystem {
         let resolvedPreparation = preparation ?? InlineMenuPreparation(nodes:[],action:"",supported:[],error:.cannotComplete,failure:.noMenu)
         try Task.checkCancellation()
         guard system.sessionAllowsInput else { throw MenuBarError.operationCancelled }
-        let fallback = right && resolvedPreparation.action != "AXShowMenu"
+        let fallback = right && resolvedPreparation.action == "AXPress"
         returnDetail = "panel=\(right ? "right" : "left") action=\(resolvedPreparation.action) ax=\(resolvedPreparation.error.rawValue) supported=\(resolvedPreparation.supported)"
         if fallback { returnDetail += " rightFallback=AXPress" }
         switch resolvedPreparation.failure {
@@ -835,6 +865,24 @@ final class MenuBarSystem {
             cacheUnavailable(text,for:current)
             throw MenuBarError.directActivationFailed(text)
         case .some(.noMenu):
+            // Custom popovers can open beside the hidden icon, outside every
+            // display. Keep the original UI and bring only that new window to
+            // the user's click location; the status item stays collected.
+            let offscreenCandidates = popoverWindows(current,includingOffscreen:true).subtracting(before)
+            for id in offscreenCandidates {
+                guard let info = system.windowInfo(onScreenOnly:true).first(where: { $0[kCGWindowNumber as String] as? UInt32 == id }),
+                      let rect = windowBounds(info), !isOnScreen(rect),
+                      let screen = NSScreen.screens.first(where: { $0.frame.contains(menuAnchor) }) ?? NSScreen.main,
+                      let primary = NSScreen.screens.first else { continue }
+                let visible = screen.visibleFrame
+                let available = CGRect(x:visible.minX,y:primary.frame.maxY-visible.maxY,width:visible.width,height:visible.height)
+                let point = CGPoint(x:min(max(menuAnchor.x-rect.width/2,available.minX),max(available.minX,available.maxX-rect.width)),
+                                    y:min(max(primary.frame.maxY-menuAnchor.y,available.minY),max(available.minY,available.maxY-rect.height)))
+                if MenuAccessibilityCatalog.positionPopover(owner:owner,matching:rect,at:point) {
+                    returnDetail += " positionedPopover=\(id)"
+                }
+            }
+            if !offscreenCandidates.isEmpty { try await Task.sleep(for:.milliseconds(80)) }
             var opened = detectedPopover.union(popoverWindows(current).subtracting(before))
             if !opened.isEmpty {
                 // A source menu window can outlive AXCancel for a fraction of a
@@ -847,7 +895,6 @@ final class MenuBarSystem {
                 // A quick user dismissal may happen while AX is still reading.
                 // An observed popover still completes the interaction.
                 if !observedWindows.isEmpty {
-                    closePanel?()
                     operationStage = "direct-completed"
                     return
                 }
@@ -855,7 +902,9 @@ final class MenuBarSystem {
                 cacheUnavailable(text,for:current)
                 throw MenuBarError.directActivationFailed(text)
             }
-            closePanel?()
+            // Keep the collection panel beneath the source popover.
+            // preparingInline remains true until it closes, so outside-click
+            // monitors do not dismiss the collection while using the popover.
             operationStage = "direct-menu-open"
             let deadline = Date().addingTimeInterval(120)
             while !opened.isEmpty && !opened.isDisjoint(with:popoverWindows(current)) {
@@ -876,11 +925,12 @@ final class MenuBarSystem {
         case .none:
             break
         }
-        cacheInlineMenu(resolvedPreparation.nodes,for:current)
+        cacheInlineMenu(resolvedPreparation.nodes,for:current,right:right)
         operationStage = "panel-menu"
-        presentInlineMenu(resolvedPreparation.nodes,entry:current)
+        presentInlineMenu(resolvedPreparation.nodes,entry:current,right:right)
     }
-    private func presentInlineMenu(_ nodes:[InlineMenuNode],entry:MenuBarEntry) {
+    private func presentInlineMenu(_ nodes:[InlineMenuNode],entry:MenuBarEntry,right:Bool) {
+        inlineRight = right
         inlineRoot = nodes; inlineEntry = entry
         lastOperationOutcome = "panelMenu"; message = "菜单已打开。"
         let presenter = NativeInlineMenuPresenter()
@@ -894,8 +944,8 @@ final class MenuBarSystem {
     private func launchDate(for pid:pid_t) -> Date? {
         NSRunningApplication(processIdentifier:pid)?.launchDate
     }
-    private func cachedInlineMenu(for entry:MenuBarEntry) -> [InlineMenuNode]? {
-        guard let cached = inlineCache[entry.id] else { return nil }
+    private func cachedInlineMenu(for entry:MenuBarEntry,right:Bool) -> [InlineMenuNode]? {
+        guard let cached = inlineCache[entry.id], cached.right == right else { return nil }
         guard cached.ownerPID == entry.ownerPID, cached.launchDate == launchDate(for:entry.ownerPID),
               Date().timeIntervalSince(cached.createdAt) < 10 else {
             inlineCache.removeValue(forKey:entry.id)
@@ -903,9 +953,9 @@ final class MenuBarSystem {
         }
         return cached.nodes
     }
-    private func cacheInlineMenu(_ nodes:[InlineMenuNode],for entry:MenuBarEntry) {
+    private func cacheInlineMenu(_ nodes:[InlineMenuNode],for entry:MenuBarEntry,right:Bool) {
         guard !nodes.isEmpty else { return }
-        inlineCache[entry.id] = CachedInlineMenu(nodes:nodes,createdAt:Date(),
+        inlineCache[entry.id] = CachedInlineMenu(right:right,nodes:nodes,createdAt:Date(),
             ownerPID:entry.ownerPID,launchDate:launchDate(for:entry.ownerPID))
     }
     private func cachedUnavailable(for entry:MenuBarEntry) -> String? {
@@ -945,9 +995,10 @@ final class MenuBarSystem {
                 inlineDebugLog("performInline path=\(path) owner=\(owner.name) frame=\(entry.frame)")
                 operating = true
                 operationStage = "panel-action"
+                let right = inlineRight
                 Task.detached { [weak self] in
                     try? await Task.sleep(for:.milliseconds(200))
-                    let error = MenuAccessibilityCatalog.press(owner:owner,frame:entry.frame,label:entry.title,path:path,expected:expected)
+                    let error = MenuAccessibilityCatalog.press(owner:owner,frame:entry.frame,label:entry.title,path:path,expected:expected,right:right,native:NativeStatusMenuTarget(windowID:entry.id,hostPID:entry.pid))
                     inlineDebugLog("source press path=\(path) error=\(error.rawValue)")
                     await self?.finishInlineAction(error:error,title:title)
                 }
@@ -1007,13 +1058,14 @@ final class MenuBarSystem {
         guard let app = NSRunningApplication(processIdentifier:pid) else { return true }
         return app.isTerminated
     }
-    private func popoverWindows(_ entry:MenuBarEntry) -> Set<UInt32> {
+    private func popoverWindows(_ entry:MenuBarEntry,includingOffscreen:Bool = false) -> Set<UInt32> {
         var result = Set<UInt32>()
         for info in system.windowInfo(onScreenOnly:true) {
             guard let id = info[kCGWindowNumber as String] as? UInt32,
                   let pid = info[kCGWindowOwnerPID as String] as? pid_t, pid == entry.ownerPID,
                   (info[kCGWindowLayer as String] as? Int ?? 0) > 0,
-                  let rect = windowBounds(info), isOnScreen(rect) else { continue }
+                  let rect = windowBounds(info), !rect.isEmpty,
+                  includingOffscreen || isOnScreen(rect) else { continue }
             result.insert(id)
         }
         return result
